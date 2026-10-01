@@ -1,0 +1,5 @@
+# Full-resolution screens live in Git LFS; thumbnails (.thumb.webp) and index.json stay in plain git
+# so the gallery and MCP previews work even without `git lfs pull`.
+library/**/*.png filter=lfs diff=lfs merge=lfs -text
+library/**/*.svg filter=lfs diff=lfs merge=lfs -text
+library/**/*.jpg filter=lfs diff=lfs merge=lfs -text

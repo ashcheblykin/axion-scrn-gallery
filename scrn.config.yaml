@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=./schemas/config.schema.json
+# Настройки движка. Что снимать — в catalog/products/*.yaml, словарь обезличивания — catalog/anonymize.yaml.
+
+library: library            # куда складываются экраны (PNG в Git LFS, превью и index.json — в обычном git)
+catalog: catalog
+environment: stage          # можно переопределить: SCRN_ENV=prod или --env prod
+timezone: Asia/Riyadh
+concurrency: 2              # сколько флоу снимать параллельно
+
+# Retina по умолчанию: десктоп 1440×900 @2x = 2880×1800, мобайл iPhone 15 Pro 393×852 @3x = 1179×2556
+platforms:
+  desktop: { width: 1440, height: 900, scale: 2 }
+  mobile: { device: "iPhone 15 Pro", width: 393, height: 852, scale: 3 }
+
+capture:
+  settleMs: 800             # пауза после загрузки, чтобы графики и карты дорисовались
+  retries: 1
+  maxFullHeight: 7000       # предел высоты «всей портянки» (.full.png), CSS px
+  hideScrollbars: true
+  # freezeTime: "2026-10-01T09:00:00+03:00"   # заморозить «сегодня» для стабильных подписей дат
+
+variants:
+  full: true                # .full.png — если контент не влез в первый экран
+  clear: true               # .clear.png — без фона приложения (прозрачный), для макапов и бренд-гайда
+  cards: true               # .cards.png — только плашки: без фона, сайдбара и шапки (обрезано по контенту)
+  thumbWidth: 720
+
+diff:
+  threshold: 0.004          # >0.4% изменившихся пикселей = новая версия экрана (меньше — шум данных)
+
+anonymize:
+  dictionary: catalog/anonymize.yaml
+  guard: strict             # strict: экран с найденными данными не публикуется, а уходит в .scrn/quarantine
+
+tagging:
+  enabled: true             # автотеги и privacy-аудит через Claude в scrn refresh (нужен ANTHROPIC_API_KEY)
+  model: claude-opus-5-5
+  effort: low
+
+git:
+  commit: false             # scrn refresh --commit / --push, или включи здесь для расписания
+  push: false
+  message: "scrn: refresh {date} — {summary}"
+
+schedule:
+  cron: "0 7 * * 1"         # каждый понедельник 07:00 (scrn watch / scrn schedule install)
+
+links:
+  repoUrl: https://github.com/ashcheblykin/axion-scrn-gallery
+  branch: main

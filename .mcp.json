@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "axion-screens": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["dist/cli/index.js", "mcp"]
+    }
+  }
+}

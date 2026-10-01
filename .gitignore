@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+
+# Sessions (cookies / tokens) — never commit
+.auth/
+
+# Local engine state: run reports, quarantine of unsafe screens, failure dumps
+.scrn/
+exports/
+
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log

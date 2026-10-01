@@ -1,0 +1,132 @@
+# yaml-language-server: $schema=../../schemas/product.schema.json
+# Axion Gen — генеративная аналитика: дашборды, KPI, инсайты, библиотека данных, ассистент, планер.
+#
+# Как устроен файл (механика Mobbin): продукт → платформы → флоу → шаги (экраны) → секции (плашки).
+# Шаг = один экран. Шаги флоу выполняются по порядку в одной вкладке, поэтому шаг 2 может
+# продолжать состояние шага 1 (клик по карточке, открытие модалки…).
+# `todo:` — шаг/флоу пропускается, пока не уточнён (видно в `scrn doctor`).
+
+id: gen
+name: Axion Gen
+description: Генеративная аналитика — дашборды, KPI и инсайты, библиотека данных, AI-ассистент, планер.
+
+environments:
+  stage:
+    baseUrl: https://axion-gen-staging1.dev.axionx.ai
+  # prod:
+  #   baseUrl: https://…
+
+auth:
+  profile: gen            # сессия: .auth/gen-stage.json (scrn auth gen)
+  startUrl: /dashboards
+  # loggedIn:
+  #   selector: "aside nav"   # что видно только залогиненному — ускоряет и уточняет проверку сессии
+
+platforms: [desktop, mobile]
+
+capture:
+  waitForHidden:
+    - "[aria-busy=true]"
+    - "[class*='skeleton' i]"
+    - "[class*='spinner' i]"
+    - ".ant-spin-spinning"
+  # Что считается «фоном» для прозрачного варианта (.clear.png). Подстрой под реальные классы layout-а.
+  backdrop: [html, body, "#root", "#app", main]
+  # Хром приложения (сайдбар, топбар) — прячется в варианте «только плашки» (scrn export --variant cards)
+  chrome: [aside, header, nav]
+  hide:
+    - "[class*='intercom' i]"
+    - "[class*='toast' i]"
+
+anonymize:
+  rules:
+    # Имя текущего пользователя в сайдбаре/шапке («Саша Щеблыкин в левом нижнем углу»)
+    - { selector: "[class*='user-name' i], [class*='username' i], [class*='profile-name' i]", kind: person }
+    - { selector: "[class*='user-email' i]", kind: email }
+  images:
+    - { selector: "[class*='avatar' i] img, img[class*='avatar' i]", with: avatar }
+    - { selector: "img[src*='momra' i], img[src*='balady' i], img[alt*='momra' i], img[alt*='balady' i]", with: logo }
+    # Кастомный логотип клиента (logo customization) — меняем на нейтральную «A»
+    - { selector: "[class*='org-logo' i] img, [class*='tenant-logo' i] img, [class*='custom-logo' i] img", with: logo }
+  network:
+    # Все JSON-ответы API проходят через словарь до отрисовки (графики на canvas, карты, тултипы)
+    - { url: "**/api/**", anonymize: true }
+
+flows:
+  - id: executive-summary
+    name: Сводка для руководителя
+    brief: executive-summary
+    description: Первые экраны Gen — список дашбордов и дашборд с KPI и инсайтами.
+    actions: [Viewing, Monitoring]
+    tags: [kpi, insights, leadership]
+    steps:
+      - id: dashboards
+        name: Дашборды
+        url: /dashboards
+        patterns: [Overview, Dashboard]
+      - id: dashboard
+        name: Дашборд с KPI
+        actions:
+          - click: "main a[href*='/dashboards/']"
+          - waitForNetworkIdle: true
+        patterns: [Dashboard, KPI summary, Analytics & Charts]
+        elements: [KPI card, Chart]
+        # Плашки для презентаций: селекторы уточни по реальной вёрстке
+        # sections:
+        #   - { id: kpi-row, name: Ряд KPI, selector: "[class*='kpi' i]" }
+
+  - id: data-library
+    name: Библиотека данных
+    description: Каталог датасетов и таблица кадров Sense внутри Gen.
+    actions: [Viewing, Filtering & Sorting]
+    tags: [data, library]
+    steps:
+      - id: library
+        name: Каталог данных
+        url: /library
+        patterns: [Data catalog, List & Table]
+      - id: sense-frames-table
+        name: Таблица кадров Sense
+        url: /library/AZ1R6M9Of9iGWIPvFDXrqQ/axion_sense.frames
+        patterns: [Data catalog, List & Table]
+        elements: [Table, Filter]
+
+  - id: agent-work
+    name: Агентная работа
+    brief: agent-work
+    description: Диалог с AI-ассистентом Gen — вопрос, ход работы агента, ответ с графиком.
+    actions: [Chatting]
+    tags: [ai, assistant, agent]
+    todo: "укажи URL ассистента/чата в Gen (или кнопку, которая его открывает) и пример запроса"
+    steps:
+      - id: chat
+        name: Диалог с ассистентом
+        url: /assistant
+        patterns: [AI assistant, Chat]
+        elements: [Chat, Message bubble]
+
+  - id: planner
+    name: Планер
+    description: Планер Gen («вторая ссылка у Гена» на встрече).
+    actions: [Planning & Scheduling]
+    tags: [planner]
+    todo: "укажи URL планера на стенде"
+    steps:
+      - id: planner
+        name: Планер
+        url: /planner
+        patterns: [Planning, Calendar & Scheduling]
+
+  # Мобильный Gen: в Figma актуальнее, чем в коде, — берём фреймы прямо из макета.
+  # node — из ссылки figma.com/design/<file>/…?node-id=<node>
+  - id: mobile-design
+    name: Мобильный Gen (Figma)
+    platforms: [mobile]
+    actions: [Viewing]
+    tags: [mobile, figma]
+    todo: "впиши node-id фреймов мобильного Gen из Figma и добавь FIGMA_TOKEN в .env"
+    steps:
+      - id: home
+        name: Главная (мобайл)
+        figma: { file: XDOceRokvyikE1cuk6HO9S, node: "0:1" }
+        patterns: [Dashboard]

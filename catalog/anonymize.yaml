@@ -1,0 +1,125 @@
+# Словарь обезличивания. Работает в трёх местах: ответы API (до отрисовки), DOM (текст, атрибуты,
+# инпуты, SVG-графики) и guard — финальная проверка всего, что видно на экране.
+# Замены детерминированные: один и тот же реальный человек → всегда одна и та же персона.
+#
+# Репозиторий должен оставаться приватным: здесь перечислены клиенты, которых нельзя светить.
+
+# Выдуманные персоны: скрипт оригинала сохраняется (латиница → латиница, арабский → арабский).
+personas:
+  latin:
+    - Alex Morgan
+    - Sam Carter
+    - Jordan Lee
+    - Taylor Reed
+    - Casey Brooks
+    - Morgan Hayes
+    - Riley Quinn
+    - Jamie Foster
+    - Avery Collins
+    - Drew Parker
+    - Omar Haddad
+    - Layla Nasser
+    - Karim Mansour
+    - Noor Saleh
+    - Yusuf Rahman
+    - Rania Aziz
+    - Faris Kamal
+    - Huda Salem
+    - Tariq Nabil
+    - Lina Farouk
+    - Elena Novak
+    - Mark Ellison
+    - Priya Raman
+    - Daniel Kim
+    - Sofia Marin
+  arabic:
+    - عمر حداد
+    - ليلى ناصر
+    - كريم منصور
+    - نور صالح
+    - يوسف رحمن
+    - رانيا عزيز
+    - فارس كمال
+    - هدى سالم
+    - طارق نبيل
+    - لينا فاروق
+    - سامي جابر
+    - منى خليل
+    - زياد عادل
+    - سلمى رشيد
+    - هاني ماجد
+  cyrillic:
+    - Алекс Морган
+    - Мария Белова
+    - Илья Орлов
+    - Анна Соколова
+    - Денис Миронов
+    - Ольга Лебедева
+    - Кирилл Воронов
+    - Нина Ковалёва
+    - Павел Зимин
+    - Вера Громова
+
+# Нейтральные организации для kind: org
+organizations:
+  - Axion Demo City
+  - Northfield Municipality
+  - Green Valley District
+  - Blue Harbor Authority
+  - City Operations Center
+  - Demo Ministry of Urban Affairs
+
+# Реальные люди, которые могут попасть в тестовые данные стенда (любой скрипт, любой порядок слов — добавляй варианты).
+people:
+  - Alexander Shcheblykin
+  - Aleksandr Shcheblykin
+  - Александр Щеблыкин
+  - Саша Щеблыкин
+  - Shcheblykin
+  - Щеблыкин
+  - Varvara Spirina
+  - Варвара Спирина
+  - Varvara
+  - Варвара
+
+# Клиенты и партнёры → нейтральные названия (латиница/кириллица — целым словом, арабский — подстрокой).
+terms:
+  - { match: "Ministry of Municipal, Rural Affairs and Housing", replace: "Demo Ministry of Urban Affairs" }
+  - { match: "Ministry of Municipal and Rural Affairs", replace: "Demo Ministry of Urban Affairs" }
+  - { match: "MOMRAH", replace: "Demo Ministry" }
+  - { match: "MOMRA", replace: "Demo Ministry" }
+  - { match: "Момра", replace: "Демо-министерство" }
+  - { match: "BaladyLens", replace: "Axion Lens" }
+  - { match: "Balady", replace: "Axion City" }
+  - { match: "Балади", replace: "Аксион Сити" }
+  - { match: "وزارة الشؤون البلدية والقروية والإسكان", replace: "الوزارة التجريبية" }
+  - { match: "وزارة البلديات", replace: "الوزارة التجريبية" }
+  - { match: "بلدي", replace: "أكسيون" }
+  - { match: "NCIM", replace: "Demo Center" }
+  - { match: "REGA", replace: "Demo Authority" }
+  - { match: "WEDO Solutions", replace: "Demo Partner" }
+  - { match: "wedo.solutions", replace: "demo-partner.example" }
+
+# Шаблоны персональных данных: заменяются с сохранением формата (длина и разделители остаются).
+patterns:
+  - name: email
+    regex: "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
+    kind: email
+  - name: phone-sa
+    regex: "(?:\\+966|00966|\\b0)\\s?5\\d(?:[\\s-]?\\d){7}"
+    kind: digits
+  - name: phone-intl
+    regex: "\\+\\d{1,3}(?:[\\s-]?\\d){7,12}"
+    kind: digits
+  - name: national-id
+    regex: "\\b[12]\\d{9}\\b"
+    kind: digits
+  - name: iban-sa
+    regex: "\\bSA\\d{2}\\s?(?:\\d{4}\\s?){4}\\d{2}\\b"
+    kind: chars
+
+# Должно отсутствовать на опубликованном экране. people и terms[].match проверяются автоматически,
+# сюда — то, что заменять не нужно, но видеть на экране нельзя (кодовые имена, внутренние проекты…).
+blocklist: []
+
+emailDomain: example.com

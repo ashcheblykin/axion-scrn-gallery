@@ -1,0 +1,114 @@
+# Контролируемый словарь (по мотивам Mobbin): им пользуются YAML-флоу, автотеги Claude и MCP-поиск.
+# Добавлять можно смело — `scrn doctor` предупредит, если в каталоге встретится термин не из списка.
+
+# Типы экранов (Mobbin: Screen patterns)
+patterns:
+  - Dashboard
+  - Overview
+  - KPI summary
+  - Analytics & Charts
+  - Report
+  - List & Table
+  - Detail
+  - Map view
+  - Media gallery
+  - Media viewer
+  - Chat
+  - AI assistant
+  - Decision & Approval
+  - Review & Moderation
+  - Task & Workflow
+  - Timeline
+  - Calendar & Scheduling
+  - Planning
+  - Data catalog
+  - Form
+  - Search
+  - Filter & Sort
+  - Settings
+  - Profile
+  - User management
+  - Notifications
+  - Login
+  - Onboarding
+  - Empty state
+  - Error
+  - Loading
+  - Modal
+  - Side panel
+  - Integration status
+
+# UI-элементы (Mobbin: UI Elements)
+elements:
+  - Card
+  - KPI card
+  - Chart
+  - Table
+  - Map
+  - Map pin
+  - Legend
+  - Sidebar
+  - Top bar
+  - Tabs
+  - Modal
+  - Drawer
+  - Form
+  - Text field
+  - Search
+  - Dropdown
+  - Date picker
+  - Filter
+  - Button
+  - Chat
+  - Message bubble
+  - Avatar
+  - Badge
+  - Status badge
+  - Pagination
+  - Toast
+  - Breadcrumb
+  - Progress bar
+  - Toggle
+  - Checkbox
+  - Timeline
+  - Image
+  - Video
+  - Tooltip
+  - Stepper
+
+# Действия во флоу (Mobbin: Flow actions)
+flowActions:
+  - Viewing
+  - Navigating
+  - Filtering & Sorting
+  - Searching
+  - Reviewing
+  - Approving & Rejecting
+  - Chatting
+  - Creating
+  - Editing
+  - Exporting & Sharing
+  - Planning & Scheduling
+  - Monitoring
+  - Escalating
+  - Configuring
+  - Logging in
+
+# Пять экранов из брифа презентации (ПЧДК) — у флоу проставлено `brief: <id>`,
+# MCP и галерея умеют фильтровать только их.
+briefs:
+  - id: quality-check
+    name: Проверка качества
+    description: Контроль качества кадров/детекций — что отбраковано и почему.
+  - id: executive-summary
+    name: Сводка для руководителя
+    description: Первые экраны разделов — KPI, инсайты, статус по направлениям (Gen, Command & Control).
+  - id: decision-card
+    name: Карточка решения
+    description: Human-in-the-loop — система предлагает решение (штрафовать / не штрафовать), человек подтверждает.
+  - id: agent-work
+    name: Агентная работа
+    description: Диалоги с агентом/ассистентом, ход рассуждения, результаты.
+  - id: customer-system-task
+    name: Задача по системе заказчика
+    description: Заявка уходит во внешнюю систему/ведомство — статусы и апрувы.

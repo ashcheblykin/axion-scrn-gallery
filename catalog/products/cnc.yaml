@@ -1,0 +1,103 @@
+# yaml-language-server: $schema=../../schemas/product.schema.json
+# Axion Command & Control — веб-интерфейс Sense (репозиторий axion.sense.web): инспекторы, задачи,
+# производительность, решения. Живёт на одном стенде с Sense, поэтому сессия общая (profile: sense).
+
+id: cnc
+name: Command & Control
+description: Операционный центр — инспекторы на карте, задачи, KPI и решения по нарушениям.
+
+environments:
+  stage:
+    baseUrl: https://axion-sense-staging.demo.axionx.ai
+    vars:
+      org: 9   # организация со симулятором инспекторов (см. #team-dev); для «чистого» стенда — 1
+
+auth:
+  profile: sense          # одна сессия на C&C и Sense: scrn auth cnc (или scrn auth sense)
+  startUrl: /{org}/dashboard
+
+platforms: [desktop, mobile]
+
+capture:
+  waitForHidden:
+    - "[aria-busy=true]"
+    - "[class*='skeleton' i]"
+    - "[class*='spinner' i]"
+    - ".ant-spin-spinning"
+  backdrop: [html, body, "#root", "#app", main]
+  chrome: [aside, header, nav]
+  hide:
+    - "[class*='toast' i]"
+  # Живые позиции инспекторов на карте не должны плодить «новые версии» экрана
+  ignoreInDiff:
+    - ".maplibregl-canvas, .mapboxgl-canvas"
+
+anonymize:
+  rules:
+    - { selector: "[class*='user-name' i], [class*='username' i], [class*='profile-name' i]", kind: person }
+    # Имена инспекторов в таблицах и карточках — уточни селекторы по вёрстке
+    - { selector: "[class*='inspector-name' i], [data-col='inspector'], [data-column='name']", kind: person }
+    - { selector: "[class*='phone' i]", kind: digits }
+    - { selector: "[class*='plate' i]", kind: chars }
+  images:
+    - { selector: "[class*='avatar' i] img, img[class*='avatar' i]", with: avatar }
+    - { selector: "img[src*='momra' i], img[src*='balady' i], img[alt*='momra' i], img[alt*='balady' i], [class*='org-logo' i] img", with: logo }
+  network:
+    - { url: "**/api/**", anonymize: true }
+
+flows:
+  - id: executive-summary
+    name: Сводка по направлениям
+    brief: executive-summary
+    description: Главный дашборд C&C — KPI, статус инспекций, инсайты.
+    actions: [Viewing, Monitoring]
+    tags: [kpi, insights, leadership]
+    steps:
+      - id: dashboard
+        name: Дашборд
+        url: /{org}/dashboard
+        patterns: [Dashboard, KPI summary]
+
+  - id: inspectors
+    name: Инспекторы
+    description: Список инспекторов, инспекторы на карте и профиль инспектора (таймлайн смены).
+    actions: [Viewing, Monitoring, Filtering & Sorting]
+    tags: [inspectors, map, field-operations]
+    steps:
+      - id: list
+        name: Инспекторы
+        url: /{org}/inspectors
+        patterns: [List & Table, Map view]
+      - id: profile
+        name: Профиль инспектора
+        actions:
+          - click: "main a[href*='/inspectors/']"
+          - waitForNetworkIdle: true
+        patterns: [Detail, Timeline]
+        elements: [Timeline, Map]
+
+  - id: decision-card
+    name: Карточка решения
+    brief: decision-card
+    description: Human-in-the-loop — система предлагает штраф, человек подтверждает или отклоняет.
+    actions: [Reviewing, Approving & Rejecting]
+    tags: [hitl, violations, fines]
+    todo: "актуального интерфейса может не быть (старый делали с Картавцевым) — укажи URL или удали флоу"
+    steps:
+      - id: card
+        name: Карточка решения
+        url: /{org}/decisions
+        patterns: [Decision & Approval, Detail]
+
+  - id: customer-system-task
+    name: Задача по системе заказчика
+    brief: customer-system-task
+    description: Заявка уходит во внешнюю систему/ведомство — статусы «отправлено / on hold / подтверждено».
+    actions: [Escalating, Monitoring]
+    tags: [integration, external-agency]
+    todo: "интерфейса может не быть — если появится статус заявки во внешней системе, укажи URL"
+    steps:
+      - id: task
+        name: Статус заявки во внешней системе
+        url: /{org}/tasks
+        patterns: [Task & Workflow, Integration status]

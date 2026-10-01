@@ -1,0 +1,71 @@
+# yaml-language-server: $schema=../../schemas/product.schema.json
+# Axion Sense — сбор и разбор данных с камер: кадры, треки, детекции, контроль качества.
+# Тот же стенд и та же сессия, что у Command & Control.
+
+id: sense
+name: Axion Sense
+description: Кадры с камер, детекции и контроль качества данных.
+
+environments:
+  stage:
+    baseUrl: https://axion-sense-staging.demo.axionx.ai
+
+auth:
+  profile: sense
+  startUrl: /frames
+
+platforms: [desktop, mobile]
+
+capture:
+  waitForHidden:
+    - "[aria-busy=true]"
+    - "[class*='skeleton' i]"
+    - "[class*='spinner' i]"
+    - ".ant-spin-spinning"
+  backdrop: [html, body, "#root", "#app", main]
+  chrome: [aside, header, nav]
+
+anonymize:
+  rules:
+    - { selector: "[class*='user-name' i], [class*='username' i], [class*='profile-name' i]", kind: person }
+    - { selector: "[class*='plate' i]", kind: chars }
+  images:
+    - { selector: "[class*='avatar' i] img, img[class*='avatar' i]", with: avatar }
+    - { selector: "img[src*='momra' i], img[src*='balady' i], [class*='org-logo' i] img", with: logo }
+  # На кадрах с дороги бывают лица и номера машин. Для публичных материалов можно размыть превью:
+  # blur: ["[class*='frame' i] img"]
+  network:
+    - { url: "**/api/**", anonymize: true }
+
+flows:
+  - id: quality-check
+    name: Проверка качества
+    brief: quality-check
+    description: Кадры, отбракованные моделью качества, и разбор конкретного кадра.
+    actions: [Reviewing, Filtering & Sorting]
+    tags: [quality, frames, detections]
+    steps:
+      - id: rejected-frames
+        name: Отбракованные кадры
+        url: /frames?imageQuality=rejected
+        patterns: [Review & Moderation, Media gallery, Filter & Sort]
+        elements: [Image, Filter]
+      - id: frame
+        name: Разбор кадра
+        actions:
+          - click: "main img"
+          - waitForNetworkIdle: true
+        patterns: [Media viewer, Detail]
+        elements: [Image]
+
+  - id: frames
+    name: Кадры и треки
+    description: Лента кадров с фильтрами по дате, детектору и качеству.
+    actions: [Viewing, Filtering & Sorting]
+    tags: [frames, tracks]
+    steps:
+      - id: frames
+        name: Кадры
+        url: /frames
+        patterns: [Media gallery, Filter & Sort]
+        elements: [Image, Filter, Date picker]

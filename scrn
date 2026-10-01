@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# ./scrn <command> — the engine CLI without a global install (npm install builds dist/ via `prepare`).
+DIR="$(cd "$(dirname "$0")" && pwd)"
+[ -f "$DIR/dist/cli/index.js" ] || (cd "$DIR" && npm run build --silent) || exit 1
+exec node "$DIR/dist/cli/index.js" "$@"

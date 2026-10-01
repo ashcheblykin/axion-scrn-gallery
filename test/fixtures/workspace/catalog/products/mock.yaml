@@ -1,0 +1,73 @@
+id: mock
+name: Mock App
+description: End-to-end fixture with deliberately sensitive data.
+environments:
+  stage:
+    baseUrl: "${MOCK_URL}"
+auth:
+  profile: mock
+  startUrl: /dashboard
+  loggedIn:
+    selector: "aside .user"
+platforms: [desktop, mobile]
+capture:
+  waitForHidden: ["#loader"]
+  backdrop: [html, body, "#root", main]
+  chrome: [aside, header]
+anonymize:
+  rules:
+    - { selector: ".user-name", kind: person }
+    - { selector: ".inspector-name", kind: person }
+    - { selector: ".phone", kind: digits }
+    - { selector: ".plate", kind: chars }
+  images:
+    - { selector: "img.avatar", with: avatar }
+    - { selector: "img.org-logo", with: logo }
+  network:
+    - { url: "**/api/**", anonymize: true }
+    - { url: "**/api/me", merge: { org: "Axion Demo City" } }
+  blocklist: ["Codename Falcon"]
+flows:
+  - id: executive-summary
+    name: Executive summary
+    brief: executive-summary
+    actions: [Viewing, Monitoring]
+    tags: [kpi]
+    steps:
+      - id: dashboard
+        name: Dashboard
+        url: /dashboard
+        patterns: [Dashboard, KPI summary]
+        sections:
+          - { id: kpi-card, name: KPI card, selector: ".kpi-card" }
+          - { id: kpi-grid, name: KPI grid, selector: "#kpi-grid", padding: 32 }
+  - id: inspectors
+    name: Inspectors
+    actions: [Viewing]
+    steps:
+      - { id: list, name: Inspectors, url: /inspectors, patterns: [List & Table] }
+  - id: agent-work
+    name: Assistant
+    brief: agent-work
+    actions: [Chatting]
+    platforms: [desktop]
+    steps:
+      - { id: chat, name: Chat, url: /assistant, patterns: [AI assistant, Chat] }
+  - id: decision-card
+    name: Decision
+    brief: decision-card
+    actions: [Reviewing, Approving & Rejecting]
+    platforms: [desktop]
+    steps:
+      - { id: queue, name: Queue, url: /dashboard }
+      - id: card
+        name: Decision card
+        actions:
+          - click: "text=Decisions"
+          - waitFor: "[role=dialog]"
+        patterns: [Decision & Approval, Modal]
+  - id: secret
+    name: Secret
+    platforms: [desktop]
+    steps:
+      - { id: roadmap, name: Roadmap, url: /secret }

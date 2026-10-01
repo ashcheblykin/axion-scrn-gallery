@@ -1,0 +1,20 @@
+# Test workspace: the real dictionary and taxonomy are copied in by the test helper.
+library: library
+catalog: catalog
+environment: stage
+concurrency: 2
+platforms:
+  desktop: { width: 1280, height: 720, scale: 2 }
+  mobile: { device: "iPhone 15 Pro", width: 393, height: 852, scale: 3 }
+capture:
+  settleMs: 150
+  networkIdleTimeoutMs: 2000
+  actionTimeoutMs: 5000
+  navigationTimeoutMs: 15000
+  retries: 0
+variants:
+  full: true
+  clear: true
+  cards: true
+tagging:
+  enabled: false
