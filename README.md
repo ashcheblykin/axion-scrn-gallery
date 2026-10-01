@@ -21,15 +21,21 @@ scrn refresh
 ```bash
 git lfs install
 npm install                      # заодно собирает dist/
-npx playwright install chromium
-cp .env.example .env             # FIGMA_TOKEN — для мобильных макетов из Figma (если нужны)
-
-./scrn auth gen                  # откроется браузер: войди через SSO/2FA, сессия сохранится сама
-./scrn auth cnc                  # одна сессия на Command & Control и Sense
-./scrn doctor                    # проверка каталога, браузера, сессий и ключей
-./scrn capture brief             # 5 экранов из брифа презентации
-./scrn gallery --open            # посмотреть, что получилось
+./scrn go                        # всё за один раз
 ```
+
+`scrn go` ставит Chromium, проверяет сессии и открывает окно браузера только там, где нужно войти через SSO/2FA. Дальше он сам снимает все флоу из каталога и разделы из обхода навигации, размечает новые экраны через Claude Code и открывает галерею. Повторный запуск обновляет базу: новые версии появляются только у изменившихся экранов.
+
+По шагам то же самое выглядит так:
+
+```bash
+./scrn auth gen && ./scrn auth cnc   # вход в стенды (C&C и Sense делят одну сессию)
+./scrn doctor                        # проверка каталога, браузера, сессий
+./scrn capture brief --tag           # 5 экранов из брифа + автотеги
+./scrn gallery --open
+```
+
+Для мобильных макетов из Figma нужен `FIGMA_TOKEN` в `.env` (шаблон — `.env.example`).
 
 `./scrn` — обёртка над `node dist/cli/index.js`. Если хочется глобальную команду `scrn`, выполни `npm link`.
 
@@ -77,6 +83,7 @@ library/
 
 | Команда | Что делает |
 |---|---|
+| `scrn go` | Всё за один раз: браузер → вход, где нужно → съёмка всех флоу и разделов → автотеги → галерея |
 | `scrn doctor` | Проверяет каталог (схемы, CSS-селекторы, TODO), браузер, сессии, ключи, LFS |
 | `scrn auth <product>` | Открывает браузер для входа через SSO/2FA и сохраняет сессию в `.auth/` (в git не попадает). `--check` проверяет сессии без окна |
 | `scrn capture [targets]` | Снимает экраны: `brief`, `gen`, `gen/executive-summary`, `cnc/inspectors/profile`. Флаги: `-p mobile`, `--headed`, `--dry-run`, `--force`, `--tag` |

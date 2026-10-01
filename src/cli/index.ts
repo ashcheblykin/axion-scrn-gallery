@@ -21,6 +21,7 @@ import { fileHistory, summary } from '../util/git.js';
 import { createLogger, plural, type Logger } from '../util/log.js';
 import { errorMessage } from '../util/pool.js';
 import { doctor } from './doctor.js';
+import { runGo } from './go.js';
 import { runRefresh } from './refresh.js';
 import { installSchedule, refreshCommand, uninstallSchedule } from './schedule.js';
 import { writeJsonSchemas } from './schemas.js';
@@ -66,7 +67,22 @@ program
     }
     fs.mkdirSync(ws.paths.auth, { recursive: true, mode: 0o700 });
     await new Promise<void>((resolve) => execFile('git', ['lfs', 'install', '--local'], { cwd: ws.root }, () => resolve()));
-    log.info('Дальше:\n  1) npx playwright install chromium\n  2) scrn auth gen && scrn auth cnc\n  3) scrn doctor\n  4) scrn capture brief --tag');
+    log.info('Дальше: ./scrn go — вход в стенды, съёмка, автотеги и галерея за один раз');
+  });
+
+program
+  .command('go')
+  .description('Всё за один раз: браузер → вход в стенды (только где нужно) → съёмка всех флоу и разделов → автотеги → галерея')
+  .option('-e, --env <env>')
+  .option('--commit', 'закоммитить библиотеку')
+  .option('--push', 'запушить коммит')
+  .option('--no-open', 'не открывать галерею')
+  .action(async (o) => {
+    const { ws, log } = ctx();
+    const r = await runGo(ws, { env: o.env, commit: o.commit ? true : undefined, push: o.push ? true : undefined, log });
+    log.dim(`галерея: ${path.relative(ws.root, r.gallery)}`);
+    if (o.open !== false) openInBrowser(r.gallery);
+    if (r.capture.run.stats.failed) process.exitCode = 2;
   });
 
 program
