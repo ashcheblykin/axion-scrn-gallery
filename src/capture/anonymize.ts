@@ -228,12 +228,22 @@ export async function stopObserving(page: Page): Promise<void> {
   await page.evaluate(() => window.__scrnAnon?.disconnect()).catch(() => undefined);
 }
 
-export async function guardPage(page: Page, nodePipe: TextPipeline): Promise<string[]> {
+/**
+ * Everything readable on the screen: guard violations (unless the guard is off) and the fake values the
+ * anonymizer left on it — the latter go to the privacy audit, which cannot tell a format-preserving fake
+ * phone from a real one by looking at pixels.
+ */
+export async function scanPage(page: Page, nodePipe: TextPipeline, guard: boolean): Promise<{ violations: string[]; substitutes: string[] }> {
   const [text, pageGenerated] = await Promise.all([
     page.evaluate(collectVisibleText),
     page.evaluate(() => [...(window.__scrnPipe?.generated ?? [])]),
   ]);
-  return nodePipe.scan(text, pageGenerated);
+  const lower = text.toLowerCase();
+  const substitutes = [...new Set([...pageGenerated, ...nodePipe.generated])]
+    .filter((v) => v.length > 2 && lower.includes(v))
+    .sort()
+    .slice(0, 150);
+  return { violations: guard ? nodePipe.scan(text, pageGenerated) : [], substitutes };
 }
 
 export function createNodePipeline(dictionary: Dictionary, product?: Product): TextPipeline {

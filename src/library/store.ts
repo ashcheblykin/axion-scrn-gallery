@@ -254,6 +254,7 @@ export class Library {
         replacements: c.anonymization.replacements,
         images: c.anonymization.images,
         violations: c.anonymization.violations,
+        substitutes: c.anonymization.substitutes,
         audit: writeAll ? undefined : prev?.anonymization.audit,
       },
       tagging: writeAll ? undefined : prev?.tagging,
@@ -262,7 +263,7 @@ export class Library {
       // Tagging is tied to pixels: a new version needs a fresh pass (scrn tag).
       record.quality = undefined;
       record.suggestedUse = undefined;
-      if (prev?.tagging?.source === 'claude') record.description = c.description;
+      if (prev?.tagging && prev.tagging.source !== 'heuristics') record.description = c.description;
     }
 
     this.upsert(record);

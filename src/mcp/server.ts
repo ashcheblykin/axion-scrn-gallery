@@ -11,7 +11,9 @@ import { EXPORT_VARIANTS, exportScreens } from '../library/export.js';
 import { LibrarySearch, type ScreenFilters } from '../library/search.js';
 import { INDEX_FILE, isLfsPointer, Library } from '../library/store.js';
 import { preview } from '../process/images.js';
-import { needsTagging } from '../tagging/claude.js';
+import { buildGallery } from '../gallery/build.js';
+import { taggingPrompt } from '../tagging/claude-code.js';
+import { applyTags, needsTagging, screenContext, tagSchema, taggingGuide, taggingQueue } from '../tagging/tags.js';
 import { createLogger } from '../util/log.js';
 
 /**
@@ -480,6 +482,92 @@ export function createServer(root?: string): McpServer {
         ],
       };
     },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Tagging by the agent itself (Claude Code on the user's subscription — no API key):
+  // tagging_queue hands out screens with previews and rules, save_tags writes the result.
+  // Headless runs (`scrn tag`) narrow the queue via env: SCRN_TAG_IDS, SCRN_TAG_ALL, SCRN_TAG_LIMIT.
+  // ---------------------------------------------------------------------------
+  const tagIds = process.env.SCRN_TAG_IDS?.split(',').filter(Boolean);
+  const tagAll = process.env.SCRN_TAG_ALL === '1';
+  const tagLimit = process.env.SCRN_TAG_LIMIT ? Number(process.env.SCRN_TAG_LIMIT) : undefined;
+  const tagged = new Set<string>();
+  const pending = (s: State) => {
+    const queue = taggingQueue(s.library, { ids: tagIds, all: tagAll }).filter((x) => !tagged.has(x.id));
+    const allowance = tagLimit === undefined ? queue.length : Math.max(0, tagLimit - tagged.size);
+    return queue.slice(0, allowance);
+  };
+  const TagItem = tagSchema(current().ws).extend({
+    id: z.string().describe('id экрана из tagging_queue'),
+    hash: z.string().optional().describe('hash из tagging_queue — защита от разметки устаревшей картинки'),
+  });
+
+  server.registerTool(
+    'tagging_queue',
+    {
+      title: 'Tagging queue',
+      description:
+        'Очередь экранов без актуальной разметки (новые и изменившиеся). Возвращает пачку с превью, контекстом и правилами. Разметку сохраняй через save_tags.',
+      inputSchema: { limit: z.number().int().min(1).max(8).optional().describe('Размер пачки (по умолчанию из scrn.config.yaml)') },
+      annotations: { readOnlyHint: true },
+    },
+    async (a) => {
+      const s = current();
+      const queue = pending(s);
+      if (!queue.length) return { content: [text({ remaining: 0, done: true, message: 'Очередь пуста — всё размечено.' })] };
+      const batch = queue.slice(0, a.limit ?? s.ws.config.tagging.batchSize);
+      const content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[] = [
+        text({
+          remaining: queue.length,
+          batch: batch.map((x, i) => ({ image: i + 1, id: x.id, hash: x.hash, context: screenContext(s.ws, x) })),
+          rules: taggingGuide(s.ws),
+        }),
+      ];
+      for (const x of batch) {
+        const img = await image(s, x.files.default.path, 'webp', s.ws.config.tagging.maxImageEdge);
+        content.push(img ?? text({ id: x.id, warning: 'картинка недоступна (git lfs pull?) — размечай по контексту или пропусти' }));
+      }
+      return { content };
+    },
+  );
+
+  server.registerTool(
+    'save_tags',
+    {
+      title: 'Save tags',
+      description: 'Сохранить разметку экранов из tagging_queue: паттерны и элементы из словаря, описание, ключевые слова, качество и privacy-аудит.',
+      inputSchema: { items: z.array(TagItem).min(1).max(8) },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async (a) => {
+      const s = current();
+      const out = { saved: [] as string[], flagged: [] as string[], stale: [] as string[], not_found: [] as string[] };
+      for (const item of a.items) {
+        const screen = s.library.get(item.id);
+        if (!screen) {
+          out.not_found.push(item.id);
+          continue;
+        }
+        if (item.hash && item.hash !== screen.hash) {
+          out.stale.push(item.id);
+          continue;
+        }
+        applyTags(s.library, screen, item, { source: 'claude-code', model: process.env.SCRN_TAG_MODEL });
+        tagged.add(item.id);
+        out.saved.push(item.id);
+        if (item.privacy.flagged) out.flagged.push(item.id);
+      }
+      s.library.save();
+      buildGallery(s.ws, s.library.index);
+      return { content: [text({ ...out, remaining: pending(current()).length })] };
+    },
+  );
+
+  server.registerPrompt(
+    'tag_new_screens',
+    { title: 'Tag new screens', description: 'Разметить новые и изменившиеся экраны (паттерны, элементы, теги, privacy-аудит)' },
+    () => ({ messages: [{ role: 'user', content: { type: 'text', text: taggingPrompt() } }] }),
   );
 
   server.registerResource(

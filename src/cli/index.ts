@@ -15,7 +15,8 @@ import { buildGallery } from '../gallery/build.js';
 import { EXPORT_VARIANTS, exportScreens, type ExportVariant } from '../library/export.js';
 import { LibrarySearch } from '../library/search.js';
 import { Library } from '../library/store.js';
-import { hasClaudeCredentials, tagScreens } from '../tagging/claude.js';
+import { runTagging } from '../tagging/run.js';
+import { taggingQueue } from '../tagging/tags.js';
 import { fileHistory, summary } from '../util/git.js';
 import { createLogger, plural, type Logger } from '../util/log.js';
 import { errorMessage } from '../util/pool.js';
@@ -61,11 +62,11 @@ program
     const env = path.join(ws.root, '.env');
     if (!fs.existsSync(env) && fs.existsSync(path.join(ws.root, '.env.example'))) {
       fs.copyFileSync(path.join(ws.root, '.env.example'), env);
-      log.ok('создан .env из .env.example — впиши ANTHROPIC_API_KEY и FIGMA_TOKEN');
+      log.ok('создан .env из .env.example — впиши FIGMA_TOKEN, если нужны мобильные макеты из Figma');
     }
     fs.mkdirSync(ws.paths.auth, { recursive: true, mode: 0o700 });
     await new Promise<void>((resolve) => execFile('git', ['lfs', 'install', '--local'], { cwd: ws.root }, () => resolve()));
-    log.info('Дальше:\n  1) npx playwright install chromium\n  2) scrn auth gen && scrn auth cnc\n  3) scrn doctor\n  4) scrn capture brief');
+    log.info('Дальше:\n  1) npx playwright install chromium\n  2) scrn auth gen && scrn auth cnc\n  3) scrn doctor\n  4) scrn capture brief --tag');
   });
 
 program
@@ -124,7 +125,7 @@ program
   .option('--force', 'записать новую версию, даже если экран не изменился')
   .option('--dry-run', 'снять в .scrn/dry-run, не трогая библиотеку')
   .option('--include-todo', 'снимать и шаги с todo')
-  .option('--tag', 'сразу прогнать автотеги Claude')
+  .option('--tag', 'сразу разметить новые и изменившиеся экраны (Claude Code)')
   .option('--no-gallery', 'не пересобирать library/index.html')
   .action(async (targetArgs: string[], o) => {
     const { ws, log } = ctx();
@@ -145,11 +146,13 @@ program
     });
     for (const n of result.run.notes) log.warn(n);
     if (!o.dryRun) {
-      const library = Library.open(ws.paths.library);
-      if (o.tag && hasClaudeCredentials()) {
-        await tagScreens(ws, library, { log, ids: result.results.filter((r) => r.outcome === 'added' || r.outcome === 'changed').map((r) => r.id) });
-        library.save();
+      const fresh = result.results.filter((r) => r.outcome === 'added' || r.outcome === 'changed').map((r) => r.id);
+      if (o.tag && fresh.length) {
+        const t = await runTagging(ws, { ids: fresh, log });
+        for (const e of t.errors) log.warn(e);
+        if (t.hint) log.dim(`Автотеги пропущены: ${t.hint}.`);
       }
+      const library = Library.open(ws.paths.library);
       if (o.gallery !== false) log.dim(`галерея: ${path.relative(ws.root, buildGallery(ws, library.index))}`);
     }
     printStats(log, result.run.stats);
@@ -209,7 +212,7 @@ program
   .option('-e, --env <env>')
   .option('--commit', 'закоммитить изменения библиотеки')
   .option('--push', 'запушить коммит')
-  .option('--no-tag', 'без автотегов Claude')
+  .option('--no-tag', 'без автотегов')
   .option('--no-discover', 'без обхода навигации')
   .option('--prune', 'удалить экраны, которых больше нет в каталоге')
   .option('--force', 'записать новые версии всех экранов')
@@ -239,21 +242,26 @@ program
 
 program
   .command('tag')
-  .description('Автотеги и privacy-аудит через Claude (новые и изменившиеся экраны)')
+  .description('Автотеги и privacy-аудит: Claude Code по подписке (headless claude -p) или Claude API')
   .argument('[ids...]', 'id экранов; по умолчанию — все без актуальных тегов')
+  .addOption(new Option('--provider <provider>', 'кто размечает').choices(['claude-code', 'api']))
   .option('--all', 'перетегировать всё')
   .option('--limit <n>', '', (v) => Number(v))
   .option('--dry-run', 'показать, что будет размечено')
   .action(async (ids: string[], o) => {
     const { ws, log } = ctx();
-    if (!o.dryRun && !hasClaudeCredentials()) throw new ConfigError('нужен ANTHROPIC_API_KEY в .env');
-    const library = Library.open(ws.paths.library);
-    const r = await tagScreens(ws, library, { ids, all: o.all, limit: o.limit, dryRun: o.dryRun, log });
-    if (!o.dryRun) {
-      library.save();
-      buildGallery(ws, library.index);
+    if (o.dryRun) {
+      const queue = taggingQueue(Library.open(ws.paths.library), { ids, all: o.all });
+      for (const s of queue.slice(0, o.limit ?? queue.length)) log.info(`  ${s.id}`);
+      log.dim(`к разметке: ${plural(Math.min(o.limit ?? queue.length, queue.length), ['экран', 'экрана', 'экранов'])}`);
+      return;
     }
-    log.info(`размечено: ${r.tagged} · на проверку: ${r.flagged.length} · ошибок: ${r.errors.length}${o.dryRun ? ` · к разметке: ${r.skipped}` : ''}`);
+    const r = await runTagging(ws, { provider: o.provider, ids, all: o.all, limit: o.limit, log });
+    if (r.hint) throw new ConfigError(`Разметка не запущена: ${r.hint}`);
+    for (const e of r.errors) log.error(e);
+    buildGallery(ws, Library.open(ws.paths.library).index);
+    log.info(`размечено: ${r.tagged} · на проверку: ${r.flagged.length} · ошибок: ${r.errors.length}`);
+    if (r.errors.length) process.exitCode = 1;
   });
 
 program

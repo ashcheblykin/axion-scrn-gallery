@@ -5,7 +5,8 @@ import type { Workspace } from '../config/load.js';
 import { launchBrowser } from '../capture/browser.js';
 import { authProfile, loadSession, sessionAgeDays } from '../capture/session.js';
 import { isLfsPointer, Library } from '../library/store.js';
-import { hasClaudeCredentials } from '../tagging/claude.js';
+import { hasApiCredentials } from '../tagging/api.js';
+import { findClaudeCli } from '../tagging/claude-code.js';
 import { isGitRepo, lfsReady } from '../util/git.js';
 import { plural, type Logger } from '../util/log.js';
 import { errorMessage } from '../util/pool.js';
@@ -90,8 +91,15 @@ export async function doctor(ws: Workspace, log: Logger): Promise<number> {
   }
 
   log.info(pc.bold('\nИнтеграции'));
-  if (hasClaudeCredentials()) ok('Claude API: ключ найден (автотеги и privacy-аудит)');
-  else log.warn('Claude API: нет ANTHROPIC_API_KEY — автотеги отключены');
+  const provider = ws.config.tagging.provider;
+  if (provider === 'claude-code') {
+    const claude = findClaudeCli(ws.config.tagging.claudePath);
+    if (claude) ok(`Автотеги: Claude Code CLI найден — refresh размечает по подписке, без API-ключа`);
+    else log.warn('Автотеги: Claude Code CLI (claude) не найден в PATH — размечай вручную командой /tag-screens в Claude Code');
+  } else if (provider === 'api') {
+    if (hasApiCredentials()) ok('Автотеги: ключ Claude API найден');
+    else bad('Автотеги: tagging.provider: api, но нет ANTHROPIC_API_KEY');
+  } else log.dim('  автотеги выключены (tagging.provider: off)');
   const figmaSteps = ws.products.some((p) => p.flows.some((f) => !f.todo && f.steps.some((s) => s.figma && !s.todo)));
   if (figmaSteps && !process.env.FIGMA_TOKEN) bad('Figma: в каталоге есть шаги из Figma, но нет FIGMA_TOKEN');
   else if (process.env.FIGMA_TOKEN) ok('Figma: токен найден');

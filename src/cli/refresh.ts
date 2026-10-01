@@ -6,7 +6,7 @@ import { crawl, discoveredFlow, writeSuggestions } from '../capture/discover.js'
 import { runCapture, type RunResult } from '../capture/runner.js';
 import { buildGallery } from '../gallery/build.js';
 import { Library } from '../library/store.js';
-import { hasClaudeCredentials, tagScreens } from '../tagging/claude.js';
+import { runTagging } from '../tagging/run.js';
 import { commitLibrary, isGitRepo, push, summary } from '../util/git.js';
 import { plural, type Logger } from '../util/log.js';
 import { errorMessage } from '../util/pool.js';
@@ -75,21 +75,21 @@ export async function runRefresh(ws: Workspace, o: RefreshOptions): Promise<Refr
     await browser.close().catch(() => undefined);
   }
 
-  const library = Library.open(ws.paths.library);
+  let library = Library.open(ws.paths.library);
   const pruned = o.prune ? library.prune() : [];
   if (pruned.length) log.info(`Удалено устаревших экранов: ${pruned.length}`);
+  library.save();
 
   let tagged = 0;
   let flagged: string[] = [];
-  const wantTags = o.tag ?? ws.config.tagging.enabled;
-  if (wantTags) {
-    if (hasClaudeCredentials()) {
-      const t = await tagScreens(ws, library, { log });
-      tagged = t.tagged;
-      flagged = t.flagged;
-    } else {
-      log.dim('Автотеги пропущены: нет ANTHROPIC_API_KEY (scrn tag — когда ключ появится).');
-    }
+  if (o.tag !== false) {
+    // Tagging writes index.json itself (Claude Code works through the MCP server in a separate process).
+    const t = await runTagging(ws, { log });
+    tagged = t.tagged;
+    flagged = t.flagged;
+    for (const e of t.errors) log.warn(e);
+    if (t.hint) log.dim(`Автотеги пропущены: ${t.hint}.`);
+    library = Library.open(ws.paths.library);
   }
   library.rebuildFlows(ws.products);
   library.save();

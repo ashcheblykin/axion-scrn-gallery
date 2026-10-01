@@ -17,4 +17,4 @@ variants:
   clear: true
   cards: true
 tagging:
-  enabled: false
+  provider: off

@@ -18,9 +18,9 @@ import {
   anonymizerInitScript,
   createNodePipeline,
   domConfig,
-  guardPage,
   installNetworkLayer,
   pipelineConfig,
+  scanPage,
   stopObserving,
 } from './anonymize.js';
 import { contextOptions, launchBrowser, resolvePlatform, type ResolvedPlatform } from './browser.js';
@@ -538,7 +538,7 @@ export async function runCapture(ws: Workspace, opts: CaptureOptions): Promise<R
     try {
       // Replacements may change text widths — let layout settle.
       await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null)))));
-      const violations = guardMode === 'off' ? [] : await guardPage(page, nodePipe);
+      const { violations, substitutes } = await scanPage(page, nodePipe, guardMode !== 'off');
       const info = await page.evaluate(inspectPage, {
         scrollContainer: product.capture.scrollContainer,
         elementRules: ELEMENT_RULES,
@@ -592,7 +592,7 @@ export async function runCapture(ws: Workspace, opts: CaptureOptions): Promise<R
         fullHeight: full ? fullHeight : undefined,
         images: { default: def, full, clear, cards, sections },
         ignoreRects,
-        anonymization: { replacements: anon.replacements, images: anon.images, violations },
+        anonymization: { replacements: anon.replacements, images: anon.images, violations, substitutes },
       };
     } finally {
       await stopObserving(page);

@@ -33,9 +33,11 @@ anonymize:
   guard: strict             # strict: экран с найденными данными не публикуется, а уходит в .scrn/quarantine
 
 tagging:
-  enabled: true             # автотеги и privacy-аудит через Claude в scrn refresh (нужен ANTHROPIC_API_KEY)
-  model: claude-opus-5-5
-  effort: low
+  # Автотеги и privacy-аудит. claude-code — размечает Claude Code по твоей подписке, ключ API не нужен:
+  # в scrn refresh / scrn tag запускается headless `claude -p`, вручную — команда /tag-screens в Claude Code.
+  provider: claude-code     # claude-code | api (нужен ANTHROPIC_API_KEY) | off
+  batchSize: 4              # экранов за один вызов tagging_queue
+  # claudeModel: sonnet     # модель для headless-режима; по умолчанию — как в твоём Claude Code
 
 git:
   commit: false             # scrn refresh --commit / --push, или включи здесь для расписания

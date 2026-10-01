@@ -78,9 +78,11 @@ export interface ScreenRecord {
     replacements: number;
     images: number;
     violations: string[];
+    /** Fake values the anonymizer put on this screen (lower-cased) — the privacy audit must not flag them. */
+    substitutes?: string[];
     audit?: PrivacyAudit;
   };
-  tagging?: { source: 'claude' | 'heuristics'; model?: string; at: string; hash: string };
+  tagging?: { source: 'claude-code' | 'claude-api' | 'heuristics'; model?: string; at: string; hash: string };
   quality?: { cutOff?: boolean; emptyState?: boolean; loading?: boolean; broken?: boolean; notes?: string };
   suggestedUse?: string[];
 }
@@ -175,5 +177,5 @@ export interface CapturedScreen {
   };
   /** Regions (device px) excluded from the change detection: clocks, live maps… */
   ignoreRects: Rect[];
-  anonymization: { replacements: number; images: number; violations: string[] };
+  anonymization: { replacements: number; images: number; violations: string[]; substitutes?: string[] };
 }

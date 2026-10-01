@@ -419,12 +419,23 @@ export const ConfigSchema = z.object({
     .prefault({}),
   tagging: z
     .object({
-      enabled: z.boolean().default(true),
+      /**
+       * claude-code — Claude Code on the user's subscription (headless `claude -p` in refresh, /tag-screens interactively);
+       * api — Anthropic API key; off — no auto-tagging.
+       */
+      provider: z.enum(['claude-code', 'api', 'off']).default('claude-code'),
+      /** Screens per tagging_queue batch (each comes with a preview image). */
+      batchSize: z.number().int().min(1).max(8).default(4),
+      /** Preview size handed to the model, long edge in px. */
+      maxImageEdge: z.number().int().positive().default(1568),
+      /** Path to the `claude` CLI if it is not on PATH (also SCRN_CLAUDE_PATH). */
+      claudePath: z.string().optional(),
+      /** Model for headless Claude Code (alias like "sonnet" or a full id); default — the user's Claude Code default. */
+      claudeModel: z.string().optional(),
+      /** provider: api only */
       model: z.string().default('claude-opus-5-5'),
       effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('low'),
       concurrency: z.number().int().min(1).max(16).default(3),
-      privacyAudit: z.boolean().default(true),
-      maxImageEdge: z.number().int().positive().default(1568),
     })
     .prefault({}),
   git: z
