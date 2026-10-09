@@ -26,9 +26,10 @@ capture:
   chrome: [aside, header, nav]
 
 anonymize:
+  # Только чувствительные поля (см. комментарий в cnc.yaml): разделы, меню и вкладки не обезличиваются.
   rules:
     - { selector: "[class*='user-name' i], [class*='username' i], [class*='profile-name' i]", kind: person }
-    - { selector: "[class*='plate' i]", kind: chars }
+    - { selector: "[class^='plate' i], [class*=' plate' i], [class*='-plate' i], [class*='_plate' i], [class*='Plate'], [data-col='plate' i], [data-column='plate' i]", kind: chars }
   images:
     - { selector: "[class*='avatar' i] img, img[class*='avatar' i]", with: avatar }
     - { selector: "img[src*='momra' i], img[src*='balady' i], [class*='org-logo' i] img", with: logo }

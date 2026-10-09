@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Product } from '../config/schema.js';
-import { DISCOVERED_FLOW, flowId, sectionPath, variantPath, type ScreenKey } from '../core/naming.js';
+import { flowId, isAutoFlow, sectionPath, SVG_VARIANT, variantPath, type ScreenKey } from '../core/naming.js';
 import type {
   CapturedScreen,
   FlowRecord,
@@ -15,6 +15,8 @@ import { compare, optimizePng, pixelHash, raw, size, thumbnail, type RawImage } 
 
 export const INDEX_FILE = 'index.json';
 const MAX_RUNS = 30;
+/** [raster variant, its vector twin in ScreenRecord.files] */
+const SVG_TWINS = Object.entries(SVG_VARIANT) as [keyof typeof SVG_VARIANT, (typeof SVG_VARIANT)[keyof typeof SVG_VARIANT]][];
 
 export type IngestOutcome = 'added' | 'changed' | 'unchanged';
 
@@ -86,6 +88,16 @@ export class Library {
     return { path: rel, width, height, bytes: data.length };
   }
 
+  /** Vector files are written as is; width/height are the CSS px of the root <svg>. */
+  private writeSvg(rel: string, svg: string): ImageFile {
+    const file = this.abs(rel);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, svg);
+    const head = svg.slice(0, 600);
+    const dim = (name: string) => Math.round(Number(new RegExp(`\\s${name}="([\\d.]+)"`).exec(head)?.[1] ?? 0));
+    return { path: rel, width: dim('width'), height: dim('height'), bytes: Buffer.byteLength(svg) };
+  }
+
   private async writeThumb(rel: string, png: Buffer, o: IngestOptions): Promise<ImageFile> {
     const file = this.abs(rel);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -124,7 +136,7 @@ export class Library {
       step: c.step,
       theme: c.theme,
       locale: c.locale,
-      position: c.flow === DISCOVERED_FLOW ? 0 : c.position,
+      position: isAutoFlow(c.flow) ? 0 : c.position,
     };
     const prev = this.get(c.id);
     const nextRaw = await raw(c.images.default);
@@ -135,10 +147,16 @@ export class Library {
     if (prev) {
       outcome = 'changed';
       const sameLayout = prev.files.default.path === variantPath(key, o.defaultLocale, 'default');
+      // New anonymization rules or logo: a fixed label is a few hundred pixels — below the threshold, but it must
+      // replace the old picture. Identical pixels stay unchanged either way.
+      const sameRendering = !c.fingerprint || prev.fingerprint === c.fingerprint;
       if (!o.force && sameLayout) {
         if (prev.hash === hash) {
           outcome = 'unchanged';
           ratio = 0;
+        } else if (!sameRendering) {
+          const prevRaw = await this.readRaw(prev.files.default.path);
+          ratio = prevRaw ? compare(prevRaw, nextRaw, { pixelThreshold: o.pixelThreshold, ignore: c.ignoreRects }).ratio : 1;
         } else {
           const prevRaw = await this.readRaw(prev.files.default.path);
           if (prevRaw) {
@@ -159,6 +177,7 @@ export class Library {
         for (const s of prev.sections) {
           this.removeFile(s.file.path);
           this.removeFile(s.thumb?.path);
+          this.removeFile(s.svg?.path);
         }
       }
       files.default = await this.writeImage(variantPath(key, o.defaultLocale, 'default'), c.images.default);
@@ -166,6 +185,10 @@ export class Library {
       if (c.images.full) files.full = await this.writeImage(variantPath(key, o.defaultLocale, 'full'), c.images.full);
       if (c.images.clear) files.clear = await this.writeImage(variantPath(key, o.defaultLocale, 'clear'), c.images.clear);
       if (c.images.cards) files.cards = await this.writeImage(variantPath(key, o.defaultLocale, 'cards'), c.images.cards);
+      for (const [variant, twin] of SVG_TWINS) {
+        const svg = c.images.svg?.[variant];
+        if (svg) files[twin] = this.writeSvg(variantPath(key, o.defaultLocale, twin), svg);
+      }
     } else {
       // Unchanged screen, but variants enabled later (or files deleted by hand) are filled in.
       const fill = async (variant: 'full' | 'clear' | 'cards') => {
@@ -178,6 +201,12 @@ export class Library {
       await fill('full');
       await fill('clear');
       await fill('cards');
+      // Same for vectors — but an existing SVG is not rewritten while the pixels stay the same (no git churn).
+      for (const [variant, twin] of SVG_TWINS) {
+        const svg = c.images.svg?.[variant];
+        const existing = files[twin];
+        if (svg && (!existing || !fs.existsSync(this.abs(existing.path)))) files[twin] = this.writeSvg(variantPath(key, o.defaultLocale, twin), svg);
+      }
       if (!fs.existsSync(this.abs(files.thumb.path))) files.thumb = await this.writeThumb(files.thumb.path, c.images.default, o);
     }
 
@@ -192,11 +221,13 @@ export class Library {
       if (prev && !writeAll) for (const s of prev.sections) {
         this.removeFile(s.file.path);
         this.removeFile(s.thumb?.path);
+        this.removeFile(s.svg?.path);
       }
       sections = [];
       for (const s of c.images.sections) {
         const file = await this.writeImage(sectionPath(key, o.defaultLocale, s.id), s.buffer);
-        const thumb = await this.writeThumb(sectionPath(key, o.defaultLocale, s.id, true), s.buffer, o);
+        const thumb = await this.writeThumb(sectionPath(key, o.defaultLocale, s.id, 'thumb'), s.buffer, o);
+        const svg = s.svg ? this.writeSvg(sectionPath(key, o.defaultLocale, s.id, 'svg'), s.svg) : undefined;
         sections.push({
           id: `${c.id}--${s.id}`,
           screenId: c.id,
@@ -208,13 +239,16 @@ export class Library {
           tags: s.tags,
           file,
           thumb,
+          svg,
         });
       }
     } else {
-      // Names/tags from YAML may have changed even if the pixels did not.
+      // Names/tags from YAML may have changed even if the pixels did not; vectors enabled later are filled in.
       sections = prev!.sections.map((s, i) => {
         const src = c.images.sections[i];
-        return { ...s, name: src.name, description: src.description, patterns: src.patterns, elements: src.elements, tags: src.tags };
+        const svg =
+          s.svg && fs.existsSync(this.abs(s.svg.path)) ? s.svg : src.svg ? this.writeSvg(sectionPath(key, o.defaultLocale, src.id, 'svg'), src.svg) : s.svg;
+        return { ...s, name: src.name, description: src.description, patterns: src.patterns, elements: src.elements, tags: src.tags, svg };
       });
     }
 
@@ -258,6 +292,7 @@ export class Library {
         audit: writeAll ? undefined : prev?.anonymization.audit,
       },
       tagging: writeAll ? undefined : prev?.tagging,
+      fingerprint: c.fingerprint ?? prev?.fingerprint,
     };
     if (writeAll) {
       // Tagging is tied to pixels: a new version needs a fresh pass (scrn tag).
@@ -299,13 +334,28 @@ export class Library {
     const orphaned: string[] = [];
     for (const s of this.index.screens) {
       if (!coveredProducts.has(s.product) || alive.has(s.id)) continue;
-      if (s.flow === DISCOVERED_FLOW && !discoveredProducts.has(s.product)) continue;
+      if (isAutoFlow(s.flow) && !discoveredProducts.has(s.product)) continue;
       if (s.status !== 'orphaned') {
         s.status = 'orphaned';
         orphaned.push(s.id);
       }
     }
     return orphaned;
+  }
+
+  /** Drop a screen with all its files (duplicates, not orphans — those wait for --prune). */
+  remove(id: string): boolean {
+    const i = this.index.screens.findIndex((s) => s.id === id);
+    if (i < 0) return false;
+    const s = this.index.screens[i];
+    for (const f of Object.values(s.files)) if (f) this.removeFile(f.path);
+    for (const sec of s.sections) {
+      this.removeFile(sec.file.path);
+      this.removeFile(sec.thumb?.path);
+      this.removeFile(sec.svg?.path);
+    }
+    this.index.screens.splice(i, 1);
+    return true;
   }
 
   prune(): string[] {
@@ -316,6 +366,7 @@ export class Library {
       for (const sec of s.sections) {
         this.removeFile(sec.file.path);
         this.removeFile(sec.thumb?.path);
+        this.removeFile(sec.svg?.path);
       }
       removed.push(s.id);
       return false;
@@ -330,7 +381,7 @@ export class Library {
     const groups = new Map<string, ScreenRecord[]>();
     for (const s of this.index.screens) {
       const d = defaults.get(s.product);
-      if (d && (s.theme !== d.theme || s.locale !== d.locale)) continue;
+      if (s.status === 'orphaned' || (d && (s.theme !== d.theme || s.locale !== d.locale))) continue;
       const id = flowId(s.product, s.platform, s.flow);
       groups.set(id, [...(groups.get(id) ?? []), s]);
     }
@@ -345,10 +396,10 @@ export class Library {
         platform: first.platform,
         flow: first.flow,
         name: flow?.name ?? first.flowName,
-        description: flow?.description,
+        description: flow?.description ?? (isAutoFlow(first.flow) ? 'Найдено обходом навигации: страницы раздела, вкладки, панели и карточки.' : undefined),
         brief: flow?.brief,
-        actions: flow?.actions ?? [],
-        tags: flow?.tags ?? [],
+        actions: flow?.actions ?? (isAutoFlow(first.flow) ? ['Navigating'] : []),
+        tags: flow?.tags ?? (isAutoFlow(first.flow) ? ['auto'] : []),
         steps: screens.map((s) => s.id),
       });
     }

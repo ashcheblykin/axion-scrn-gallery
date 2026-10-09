@@ -1,7 +1,10 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { BrowserContext, Page, Route } from 'playwright';
+import sharp from 'sharp';
 import type { Dictionary, NetworkRule, Product } from '../config/schema.js';
+import { AXION_MARK_PATH } from '../core/brand.js';
 import { createDomAnonymizer, type DomAnonConfig } from '../inpage/dom.js';
 import { collectVisibleText } from '../inpage/inspect.js';
 import { createTextPipeline, type PipelineConfig, type TextPipeline } from '../inpage/pipeline.js';
@@ -37,12 +40,87 @@ function fileToDataUri(file: string): string {
   return `data:${mime};base64,${fs.readFileSync(file).toString('base64')}`;
 }
 
-export function domConfig(root: string, product: Product): DomAnonConfig {
-  const logoFile = path.join(root, 'assets', 'anonymize', 'logo.svg');
-  const logoDataUri = fs.existsSync(logoFile)
-    ? fileToDataUri(logoFile)
-    : 'data:image/svg+xml;charset=utf-8,' +
-      encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#111"/><path d="M32 14 46 50h-7l-3-8H28l-3 8h-7L32 14Zm0 13-3 9h6l-3-9Z" fill="#fff"/></svg>');
+const svgDataUri = (svg: string) => `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+
+/** Used if assets/anonymize/logo.svg is missing. */
+const FALLBACK_LOGO = `<svg width="140" height="140" viewBox="0 0 140 140" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="${AXION_MARK_PATH}" fill="black"/></svg>`;
+
+const BLACK = /^(?:black|#000(?:0{3})?|#000000ff|rgb\(\s*0\s*,\s*0\s*,\s*0\s*\))$/i;
+
+/** A black-only mark becomes white for dark backgrounds; colored logos stay as they are. */
+export function logoOnDark(svg: string): string {
+  const colors = [...svg.matchAll(/(?:fill|stroke)\s*[=:]\s*["']?\s*([^"';\s>]+)/gi)].map((m) => m[1]).filter((c) => !/^(?:none|transparent)$/i.test(c));
+  if (!colors.length || !colors.every((c) => BLACK.test(c))) return svg;
+  return svg.replace(/((?:fill|stroke)\s*[=:]\s*["']?\s*)(black|#000(?:0{3})?|#000000ff|rgb\(\s*0\s*,\s*0\s*,\s*0\s*\))/gi, '$1#FFFFFF');
+}
+
+/**
+ * The replacement logo, cropped to the mark itself: clear space baked into the file would shrink the mark
+ * inside a client-logo slot (28 px in a header → a 13 px icon).
+ */
+export async function fitLogo(svg: string): Promise<string> {
+  try {
+    const root = /<svg\b[^>]*>/i.exec(svg)?.[0] ?? '';
+    const vb = /viewBox\s*=\s*["']\s*([-\d.]+)[\s,]+([-\d.]+)[\s,]+([-\d.]+)[\s,]+([-\d.]+)/i.exec(root);
+    const w = Number(/\swidth\s*=\s*["']([\d.]+)/i.exec(root)?.[1] ?? vb?.[3] ?? 0);
+    if (!vb || !w) return svg;
+    const [x, y, vw, vh] = vb.slice(1).map(Number);
+    const target = 512;
+    const { data, info } = await sharp(Buffer.from(svg), { density: (72 * target) / w }).png().toBuffer({ resolveWithObject: true });
+    const t = await sharp(data).trim({ threshold: 1 }).toBuffer({ resolveWithObject: true });
+    const k = vw / info.width;
+    const bx = x + -(t.info.trimOffsetLeft ?? 0) * k;
+    const by = y + -(t.info.trimOffsetTop ?? 0) * (vh / info.height);
+    const bw = t.info.width * k;
+    const bh = t.info.height * (vh / info.height);
+    if (!(bw > 0 && bh > 0) || (bw >= vw * 0.98 && bh >= vh * 0.98)) return svg;
+    const m = Math.max(bw, bh) * 0.06;
+    const box = [bx - m, by - m, bw + 2 * m, bh + 2 * m].map((n) => Math.round(n * 100) / 100);
+    const height = 24;
+    const width = Math.round((height * box[2]) / box[3]);
+    return svg
+      .replace(/viewBox\s*=\s*["'][^"']*["']/i, `viewBox="${box.join(' ')}"`)
+      .replace(/(<svg\b[^>]*?)\swidth\s*=\s*["'][^"']*["']/i, `$1 width="${width}"`)
+      .replace(/(<svg\b[^>]*?)\sheight\s*=\s*["'][^"']*["']/i, `$1 height="${height}"`);
+  } catch {
+    return svg;
+  }
+}
+
+export interface LogoAssets {
+  /** For light backgrounds (as drawn in assets/anonymize/logo.svg). */
+  onLight: string;
+  /** For dark backgrounds: assets/anonymize/logo-on-dark.svg or the white version of a black mark. */
+  onDark: string;
+  /** Raw files — part of the anonymization fingerprint. */
+  source: string;
+}
+
+const logoCache = new Map<string, Promise<LogoAssets>>();
+
+export function logoAssets(root: string): Promise<LogoAssets> {
+  const dir = path.join(root, 'assets', 'anonymize');
+  const main = path.join(dir, 'logo.svg');
+  const dark = path.join(dir, 'logo-on-dark.svg');
+  const read = (f: string) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : undefined);
+  const source = read(main) ?? FALLBACK_LOGO;
+  const darkSource = read(dark);
+  const key = `${source}\n${darkSource ?? ''}`;
+  if (!logoCache.has(key)) {
+    logoCache.set(
+      key,
+      (async () => {
+        const light = await fitLogo(source);
+        const onDark = darkSource ? await fitLogo(darkSource) : logoOnDark(light);
+        return { onLight: svgDataUri(light), onDark: svgDataUri(onDark), source: key };
+      })(),
+    );
+  }
+  return logoCache.get(key)!;
+}
+
+export async function domConfig(root: string, product: Product): Promise<DomAnonConfig> {
+  const logo = await logoAssets(root);
   const keywords = new Set(['logo', 'avatar', 'blur', 'hide']);
   return {
     rules: product.anonymize.rules,
@@ -54,9 +132,27 @@ export function domConfig(root: string, product: Product): DomAnonConfig {
     }),
     blur: product.anonymize.blur,
     hide: product.anonymize.hide,
-    logoDataUri,
+    logoDataUri: logo.onLight,
+    logoOnDarkDataUri: logo.onDark,
     attributes: ANON_ATTRIBUTES,
   };
+}
+
+/** Bump when the engine starts drawing screens differently (anonymization, variants) — forces fresh versions. */
+export const ENGINE_VERSION = 2;
+
+/**
+ * What the published pixels depend on besides the app itself. A change here must produce new versions even if
+ * the pixel diff stays under the threshold (a fixed sidebar label is only a few hundred pixels).
+ */
+export async function captureFingerprint(root: string, dictionary: Dictionary, product: Product): Promise<string> {
+  const logo = await logoAssets(root);
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify({ v: ENGINE_VERSION, anonymize: product.anonymize, capture: product.capture, dictionary }))
+    .update(logo.source)
+    .digest('hex')
+    .slice(0, 16);
 }
 
 /** Injected into every page of the context before any app script runs. */
@@ -222,6 +318,11 @@ export async function anonymizeDom(
     },
     { known, observe },
   );
+}
+
+/** Fake values the page anonymizer produced — never reported by the guard. */
+export async function pageSafeValues(page: Page): Promise<string[]> {
+  return page.evaluate(() => [...(window.__scrnPipe?.generated ?? [])]).catch(() => []);
 }
 
 export async function stopObserving(page: Page): Promise<void> {

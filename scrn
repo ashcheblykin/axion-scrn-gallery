@@ -1,5 +1,12 @@
 #!/usr/bin/env sh
-# ./scrn <command> — the engine CLI without a global install (npm install builds dist/ via `prepare`).
+# ./scrn <command> — the engine CLI without a global install. After `git pull` it installs new dependencies
+# and rebuilds dist/ when the sources are newer, so the command always runs the current code.
 DIR="$(cd "$(dirname "$0")" && pwd)"
-[ -f "$DIR/dist/cli/index.js" ] || (cd "$DIR" && npm run build --silent) || exit 1
+if [ ! -d "$DIR/node_modules/dom-to-svg" ] || [ "$DIR/package.json" -nt "$DIR/node_modules/.package-lock.json" ]; then
+  (cd "$DIR" && npm install --no-audit --no-fund --silent) || exit 1
+fi
+if [ ! -f "$DIR/dist/cli/index.js" ] || [ ! -f "$DIR/dist/inpage/vector.iife.js" ] ||
+  [ -n "$(find "$DIR/src" "$DIR/scripts" -type f -newer "$DIR/dist/cli/index.js" 2>/dev/null | head -n 1)" ]; then
+  (cd "$DIR" && npm run build --silent) || exit 1
+fi
 exec node "$DIR/dist/cli/index.js" "$@"

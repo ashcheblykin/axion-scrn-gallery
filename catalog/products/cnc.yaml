@@ -33,17 +33,27 @@ capture:
     - ".maplibregl-canvas, .mapboxgl-canvas"
 
 anonymize:
+  # Правила — только для чувствительных полей: имена людей, телефоны, номера машин. Названия разделов,
+  # меню, вкладок и заголовков не трогаются никогда (движок пропускает nav/menu/tablist и всё, что не похоже
+  # на значение: номер без цифр, «имя» из двадцати слов). Селекторы — по началу класса, а не по подстроке:
+  # [class*='plate'] ловил и «template» (transition-[grid-template-rows] у раскрывающихся групп меню).
   rules:
     - { selector: "[class*='user-name' i], [class*='username' i], [class*='profile-name' i]", kind: person }
     # Имена инспекторов в таблицах и карточках — уточни селекторы по вёрстке
-    - { selector: "[class*='inspector-name' i], [data-col='inspector'], [data-column='name']", kind: person }
-    - { selector: "[class*='phone' i]", kind: digits }
-    - { selector: "[class*='plate' i]", kind: chars }
+    - { selector: "[class*='inspector-name' i], [class*='inspectorName'], [data-col='inspector' i], [data-column='inspector' i]", kind: person }
+    - { selector: "[class^='phone' i], [class*=' phone' i], [class*='-phone' i], [class*='_phone' i], [class*='Phone'], a[href^='tel:']", kind: digits }
+    - { selector: "[class^='plate' i], [class*=' plate' i], [class*='-plate' i], [class*='_plate' i], [class*='Plate'], [data-col='plate' i], [data-column='plate' i]", kind: chars }
   images:
     - { selector: "[class*='avatar' i] img, img[class*='avatar' i]", with: avatar }
     - { selector: "img[src*='momra' i], img[src*='balady' i], img[alt*='momra' i], img[alt*='balady' i], [class*='org-logo' i] img", with: logo }
   network:
     - { url: "**/api/**", anonymize: true }
+
+# Обход разделов (scrn discover / refresh): C&C и Sense — одно приложение, оно обходится один раз, а разделы
+# раскладываются по продуктам по маршрутам каталога (/frames… → Sense, остальное → C&C).
+discover:
+  maxPages: 150
+  depth: 3
 
 flows:
   - id: executive-summary

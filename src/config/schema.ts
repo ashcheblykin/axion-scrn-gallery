@@ -293,10 +293,18 @@ export const ProductSchema = z.object({
   anonymize: ProductAnonymizeSchema.prefault({}),
   discover: z
     .object({
-      linkSelectors: z.array(z.string()).default(['nav a[href]', 'aside a[href]', '[role=navigation] a[href]', 'header a[href]']),
+      /** Navigation containers: their links (and collapsed groups, href-less items) are the sections. */
+      navSelectors: z.array(z.string()).default(['nav', 'aside', '[role=navigation]', 'header', '[role=menubar]']),
       exclude: z.array(z.string()).default(['logout', 'signout', 'sign-out', 'auth', 'login']),
-      maxPages: z.number().int().positive().default(40),
-      depth: z.number().int().min(0).max(3).default(1),
+      /** Pages visited per product (0 — do not crawl the product). */
+      maxPages: z.number().int().nonnegative().default(150),
+      /** Tabs, panels and row details captured as states, per product. */
+      maxStates: z.number().int().nonnegative().default(150),
+      maxTabs: z.number().int().nonnegative().default(8),
+      /** 1 — nav sections only; 2 — plus pages linked from them (details); 3 — and one level deeper. */
+      depth: z.number().int().min(0).max(4).default(3),
+      /** Platforms the discovered flows are captured on (mobile only if the web app is responsive). */
+      platforms: z.array(z.string()).default(['desktop']),
     })
     .prefault({}),
   flows: z.array(FlowSchema).default([]),
@@ -397,6 +405,8 @@ export const ConfigSchema = z.object({
       full: z.boolean().default(true),
       clear: z.boolean().default(true),
       cards: z.boolean().default(true),
+      /** Editable vector SVG next to every PNG variant and section (text stays text — for Figma and slides). */
+      svg: z.boolean().default(true),
       thumbWidth: z.number().int().positive().default(720),
       thumbQuality: z.number().int().min(1).max(100).default(78),
     })

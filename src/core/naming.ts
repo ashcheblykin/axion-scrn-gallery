@@ -7,14 +7,21 @@
  *   library/<product>/<platform>/<flow>/<NN>-<step>….cards.png                        ← background + chrome removed
  *   library/<product>/<platform>/<flow>/<NN>-<step>….thumb.webp                       ← preview (plain git)
  *   library/<product>/<platform>/<flow>/<NN>-<step>…--<section>.png                   ← isolated element ("плашка")
+ *   library/<product>/<platform>/<flow>/<NN>-<step>….svg / .clear.svg / .cards.svg / .full.svg / --<section>.svg
+ *                                                                                    ← editable vector versions
  *
  * Everything is Retina: desktop @2x, mobile @3x (see scrn.config.yaml → platforms).
  */
 
 export const DEFAULT_THEME = 'default';
-export const DISCOVERED_FLOW = '_discovered';
+/** Flows built by `scrn discover` start with "_" (curated ids are kebab-case): `_planning`, `_inspectors`. */
+export const AUTO_FLOW_RE = /^_[a-z0-9][a-z0-9-]*$/;
+export const isAutoFlow = (flow: string): boolean => flow.startsWith('_');
 
-export type Variant = 'default' | 'full' | 'clear' | 'cards' | 'thumb';
+export type Variant = 'default' | 'full' | 'clear' | 'cards' | 'thumb' | 'svg' | 'fullSvg' | 'clearSvg' | 'cardsSvg';
+
+/** Raster variant → its vector twin in ScreenRecord.files. */
+export const SVG_VARIANT = { default: 'svg', full: 'fullSvg', clear: 'clearSvg', cards: 'cardsSvg' } as const;
 
 export interface ScreenKey {
   product: string;
@@ -57,7 +64,7 @@ export function screenDir(key: Pick<ScreenKey, 'product' | 'platform' | 'flow'>)
   return `${key.product}/${key.platform}/${key.flow}`;
 }
 
-/** Position 0 (discovered screens) has no number: their order changes with the navigation. */
+/** Position 0 (auto flows) has no number: their order changes with the navigation. */
 export function screenStem(key: ScreenKey, defaultLocale: string): string {
   const base = key.position > 0 ? `${String(key.position).padStart(2, '0')}-${key.step}` : key.step;
   return [base, ...suffixes(key, defaultLocale)].join('.');
@@ -70,17 +77,27 @@ export function variantPath(key: ScreenKey, defaultLocale: string, variant: Vari
       return `${base}.png`;
     case 'thumb':
       return `${base}.thumb.webp`;
+    case 'svg':
+      return `${base}.svg`;
+    case 'fullSvg':
+    case 'clearSvg':
+    case 'cardsSvg':
+      return `${base}.${variant.slice(0, -3)}.svg`;
     default:
       return `${base}.${variant}.png`;
   }
 }
 
-export function sectionPath(key: ScreenKey, defaultLocale: string, section: string, thumb = false): string {
+export function sectionPath(key: ScreenKey, defaultLocale: string, section: string, kind: 'png' | 'thumb' | 'svg' | boolean = 'png'): string {
   const base = `${screenDir(key)}/${screenStem(key, defaultLocale)}--${section}`;
-  return thumb ? `${base}.thumb.webp` : `${base}.png`;
+  const k = kind === true ? 'thumb' : kind === false ? 'png' : kind;
+  return k === 'thumb' ? `${base}.thumb.webp` : k === 'svg' ? `${base}.svg` : `${base}.png`;
 }
 
-/** "Gen · Executive summary · 01 KPI overview (desktop, dark).png" — for exports and gallery downloads. */
+/**
+ * "Gen · Executive summary · 01 KPI overview (desktop, dark)@2x.png" — for exports and gallery downloads.
+ * The scale suffix follows Figma: none for 1x, "@2x" for twice the CSS size.
+ */
 export function humanFileName(parts: {
   productName: string;
   flowName: string;
@@ -91,12 +108,16 @@ export function humanFileName(parts: {
   locale: string;
   variant?: string;
   ext?: string;
+  scale?: number;
+  qualifiers?: string[];
 }): string {
   const qualifiers = [parts.platform];
   if (parts.theme !== DEFAULT_THEME) qualifiers.push(parts.theme);
   qualifiers.push(parts.locale);
   if (parts.variant && parts.variant !== 'default') qualifiers.push(parts.variant);
+  qualifiers.push(...(parts.qualifiers ?? []));
   const nn = String(parts.position).padStart(2, '0');
-  const raw = `${parts.productName} · ${parts.flowName} · ${nn} ${parts.title} (${qualifiers.join(', ')}).${parts.ext ?? 'png'}`;
+  const at = parts.scale && Math.abs(parts.scale - 1) > 1e-6 ? `@${Math.round(parts.scale * 100) / 100}x` : '';
+  const raw = `${parts.productName} · ${parts.flowName} · ${nn} ${parts.title} (${qualifiers.join(', ')})${at}.${parts.ext ?? 'png'}`;
   return raw.replace(/[/\\:*?"<>|]+/g, '-');
 }

@@ -2,13 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Browser, Page } from 'playwright';
 import type { Workspace } from '../config/load.js';
-import type { Action, Flow, LocaleSpec, Product, Step, Theme } from '../config/schema.js';
-import { DISCOVERED_FLOW, screenId, type ScreenKey } from '../core/naming.js';
+import type { Action, Flow, LocaleSpec, Product, Section, Step, Theme } from '../config/schema.js';
+import { isAutoFlow, screenId, type ScreenKey } from '../core/naming.js';
 import type { CapturedScreen, Rect, RunRecord, RunStats } from '../core/types.js';
 import { inspectPage, measureRects } from '../inpage/inspect.js';
 import type { TextPipeline } from '../inpage/pipeline.js';
 import { Library, type IngestOutcome } from '../library/store.js';
-import { fitExact, roundCorners, size, trimTransparent } from '../process/images.js';
+import { fitExact, roundCorners, size, trimTransparentBox } from '../process/images.js';
 import { ELEMENT_RULES, guessPatterns } from '../tagging/heuristics.js';
 import type { Logger } from '../util/log.js';
 import { errorMessage, mapPool } from '../util/pool.js';
@@ -16,18 +16,22 @@ import { resolveUrl, runAction, runActions, type ActionContext } from './actions
 import {
   anonymizeDom,
   anonymizerInitScript,
+  captureFingerprint,
   createNodePipeline,
   domConfig,
   installNetworkLayer,
+  pageSafeValues,
   pipelineConfig,
   scanPage,
   stopObserving,
 } from './anonymize.js';
 import { contextOptions, launchBrowser, resolvePlatform, type ResolvedPlatform } from './browser.js';
+import { routeKey } from './discover.js';
 import { exportFigmaFrame } from './figma.js';
 import { authProfile, isLoggedIn, loadSession, sessionStorageInitScript, type SessionFile } from './session.js';
-import { shootCards, shootClear, shootFull, shootSection, shootViewport } from './shoot.js';
+import { shootCards, shootClear, shootFull, shootSection, shootViewport, withExpandedViewport } from './shoot.js';
 import { settle } from './stabilize.js';
+import { captureVector, type VectorOptions, type VectorVariant } from './vector.js';
 
 export interface Target {
   product?: string;
@@ -69,10 +73,12 @@ export interface CaptureOptions {
   force?: boolean;
   dryRun?: boolean;
   includeTodo?: boolean;
-  /** Extra synthetic flows (from `scrn discover`). */
+  /** Extra synthetic flows (from `scrn discover`, one per navigation section). */
   extraFlows?: { product: string; flow: Flow }[];
   /** Skip curated flows (discover-only runs). */
   onlyExtra?: boolean;
+  /** Products discovery ran for in this run (their auto-flow screens that were not found again become orphaned). */
+  discoveredProducts?: string[];
   /** Mark screens that disappeared from the catalog as orphaned (full refresh only). */
   markOrphans?: boolean;
   browser?: Browser;
@@ -115,6 +121,8 @@ interface Job {
   flow: Flow;
   steps: PlannedStep[];
   defaultLocale: string;
+  /** See captureFingerprint — set when the job starts. */
+  fingerprint?: string;
 }
 
 /** Platform overrides from `on: { mobile: {...} }`; null if the step does not exist on this platform. */
@@ -207,7 +215,7 @@ export function keyFor(job: Job, ps: PlannedStep): ScreenKey {
     step: ps.step.id,
     theme: job.theme.id,
     locale: job.locale.id,
-    position: job.flow.id === DISCOVERED_FLOW ? 0 : ps.position,
+    position: isAutoFlow(job.flow.id) ? 0 : ps.position,
   };
 }
 
@@ -357,6 +365,7 @@ export async function runCapture(ws: Workspace, opts: CaptureOptions): Promise<R
     }
 
     const nodePipe = createNodePipeline(ws.dictionary, job.product);
+    job.fingerprint = await captureFingerprint(ws.root, ws.dictionary, job.product);
     const context = await browser.newContext(
       contextOptions({
         config: cfg,
@@ -379,7 +388,7 @@ export async function runCapture(ws: Workspace, opts: CaptureOptions): Promise<R
       );
     }
     if (cfg.capture.freezeTime) await context.clock.setFixedTime(new Date(cfg.capture.freezeTime));
-    await context.addInitScript(anonymizerInitScript(pipelineConfig(ws.dictionary, job.product), domConfig(ws.root, job.product)));
+    await context.addInitScript(anonymizerInitScript(pipelineConfig(ws.dictionary, job.product), await domConfig(ws.root, job.product)));
     await installNetworkLayer(context, job.product, nodePipe);
 
     const actx: ActionContext = {
@@ -529,7 +538,36 @@ export async function runCapture(ws: Workspace, opts: CaptureOptions): Promise<R
     description: ps.step.description,
     brief: job.flow.brief,
     tags: [...job.flow.tags, ...ps.step.tags],
+    fingerprint: job.fingerprint,
   });
+
+  /** Vector of an isolated section: its own box plus the transparent padding the PNG has. */
+  const sectionVector = async (
+    page: Page,
+    s: Section,
+    vector: (label: string, o: Omit<VectorOptions, 'scale' | 'guard'>) => Promise<Partial<Record<VectorVariant, string>> | undefined>,
+  ): Promise<string | undefined> => {
+    if (!cfg.variants.svg) return undefined;
+    const base = page.locator(s.selector);
+    const locator = s.nth !== undefined ? base.nth(s.nth) : base.first();
+    // Any Playwright selector works: the element is marked and found again by attribute.
+    await locator.evaluate((el) => el.setAttribute('data-scrn-vroot', '1'));
+    try {
+      const run = async () => {
+        await locator.scrollIntoViewIfNeeded({ timeout: cfg.capture.actionTimeoutMs });
+        const b = await locator.boundingBox();
+        if (!b) return undefined;
+        const pad = s.padding;
+        const area = { x: b.x - pad, y: b.y - pad, width: b.width + pad * 2, height: b.height + pad * 2 };
+        return (await vector(`svg секции «${s.id}»`, { root: '[data-scrn-vroot]', area, fill: s.fill }))?.default;
+      };
+      const b = await locator.boundingBox();
+      const vp = page.viewportSize();
+      return b && vp && b.height + s.padding * 2 > vp.height ? await withExpandedViewport(page, cfg.capture.maxFullHeight, run) : await run();
+    } finally {
+      await locator.evaluate((el) => el.removeAttribute('data-scrn-vroot')).catch(() => undefined);
+    }
+  };
 
   const captureScreen = async (page: Page, job: Job, ps: PlannedStep, key: ScreenKey, id: string, nodePipe: TextPipeline): Promise<CapturedScreen> => {
     const { step } = ps;
@@ -551,26 +589,60 @@ export async function runCapture(ws: Workspace, opts: CaptureOptions): Promise<R
       const vpNow = page.viewportSize() ?? { width: job.platform.width, height: job.platform.height };
       const exact = (buf: Buffer) => fitExact(buf, Math.round(vpNow.width * scale), Math.round(vpNow.height * scale));
       const def = await exact(await shootViewport(page));
+
+      // Vector twins: same anonymized DOM, same moment. A failure costs the SVG, never the screen.
+      const safe = cfg.variants.svg ? await pageSafeValues(page) : [];
+      const guard = (text: string) => (guardMode === 'off' ? [] : nodePipe.scan(text, safe));
+      // A screen the guard already rejected is not published — its vectors would only cost time.
+      const unsafe = guardMode === 'strict' && violations.length > 0;
+      const vector = async (label: string, o: Omit<VectorOptions, 'scale' | 'guard'>) => {
+        if (!cfg.variants.svg || unsafe) return undefined;
+        try {
+          const v = await captureVector(page, { ...o, scale, guard });
+          for (const w of v.warnings) opts.log.debug(`${id}: ${label}: ${w}`);
+          if (v.violations.length) opts.log.warn(`${id}: ${label} не сохранён — в тексте SVG найдено: ${v.violations.slice(0, 3).join(', ')}`);
+          return v.svg;
+        } catch (err) {
+          opts.log.warn(`${id}: ${label} не снят — ${errorMessage(err)}`);
+          return undefined;
+        }
+      };
+
       const wantFull = step.full ?? info.overflow;
       let full: Buffer | undefined;
       let fullHeight: number | undefined;
+      let fullSvg: string | undefined;
       if (cfg.variants.full && wantFull) {
-        const shot = await shootFull(page, cfg.capture.maxFullHeight);
+        const shot = await shootFull(page, cfg.capture.maxFullHeight, () => vector('svg (вся страница)', {}));
         full = shot.buffer;
         fullHeight = shot.height;
+        fullSvg = shot.extra?.default;
       }
       const clear = cfg.variants.clear ? await exact(await shootClear(page, product.capture.backdrop)) : undefined;
-      const cards =
+      const trimmed =
         cfg.variants.cards && product.capture.chrome.length
-          ? await trimTransparent(await shootCards(page, product.capture.backdrop, product.capture.chrome), Math.round(16 * scale))
+          ? await trimTransparentBox(await shootCards(page, product.capture.backdrop, product.capture.chrome), Math.round(16 * scale))
           : undefined;
+      const cards = trimmed?.buffer;
+
+      const variants: VectorVariant[] = ['default', ...(clear ? (['clear'] as const) : []), ...(cards ? (['cards'] as const) : [])];
+      const svgs = await vector('svg', {
+        variants,
+        backdrop: product.capture.backdrop,
+        chrome: product.capture.chrome,
+        cardsBoxDevice: trimmed?.box,
+      });
 
       const sections: CapturedScreen['images']['sections'] = [];
       for (const s of step.sections) {
         try {
           const shot = await shootSection(page, s, { maxHeight: cfg.capture.maxFullHeight, timeoutMs: cfg.capture.actionTimeoutMs, scale });
           const buffer = s.radius !== undefined ? await roundCorners(shot.buffer, shot.radius, shot.padding) : shot.buffer;
-          sections.push({ id: s.id, name: s.name, description: s.description, patterns: s.patterns, elements: s.elements, tags: s.tags, buffer });
+          const svg = await sectionVector(page, s, vector).catch((err) => {
+            opts.log.warn(`${id}: svg секции «${s.id}» не снят — ${errorMessage(err)}`);
+            return undefined;
+          });
+          sections.push({ id: s.id, name: s.name, description: s.description, patterns: s.patterns, elements: s.elements, tags: s.tags, buffer, svg });
         } catch (err) {
           opts.log.warn(`${id}: секция "${s.id}" не снята — ${errorMessage(err)}`);
         }
@@ -581,16 +653,24 @@ export async function runCapture(ws: Workspace, opts: CaptureOptions): Promise<R
       const elements = [...new Set([...step.elements, ...info.elements])];
       return {
         ...screenBase(job, ps, key, id),
-        source: job.flow.id === DISCOVERED_FLOW ? 'discover' : 'web',
+        source: isAutoFlow(job.flow.id) ? 'discover' : 'web',
         route: url.pathname + url.search,
-        title: job.flow.id === DISCOVERED_FLOW ? discoveredTitle(info.heading, info.title, ps.step.name) : ps.step.name,
+        // A state (tab, panel) shares the page heading — its own name tells the screens apart.
+        title: isAutoFlow(job.flow.id) && !step.actions.length ? discoveredTitle(info.heading, info.title, ps.step.name) : ps.step.name,
         patterns: [...new Set([...step.patterns, ...guessPatterns(info.elements, info.text)])],
         elements,
         text: info.text,
         viewport: { width: vp.width, height: vp.height, scale },
         overflow: info.overflow,
         fullHeight: full ? fullHeight : undefined,
-        images: { default: def, full, clear, cards, sections },
+        images: {
+          default: def,
+          full,
+          clear,
+          cards,
+          svg: svgs || fullSvg ? { ...svgs, full: fullSvg } : undefined,
+          sections,
+        },
         ignoreRects,
         anonymization: { replacements: anon.replacements, images: anon.images, violations, substitutes },
       };
@@ -612,11 +692,13 @@ export async function runCapture(ws: Workspace, opts: CaptureOptions): Promise<R
   }
 
   if (!opts.dryRun) {
+    const dupes = dropAutoDuplicates(library);
+    if (dupes.length) runNotes.push(`из обхода убраны дубли экранов каталога: ${dupes.join(', ')}`);
     if (opts.markOrphans) {
       const alive = expectedIds(ws, opts.env);
       for (const r of results) alive.add(r.id);
       const covered = new Set(jobs.map((j) => j.product.id));
-      const discovered = new Set((opts.extraFlows ?? []).map((x) => x.product));
+      const discovered = new Set([...(opts.discoveredProducts ?? []), ...(opts.extraFlows ?? []).map((x) => x.product)]);
       const orphaned = library.markOrphans(alive, covered, discovered);
       if (orphaned.length) runNotes.push(`orphaned (шаг удалён из каталога): ${orphaned.join(', ')}`);
     }
@@ -640,6 +722,23 @@ export async function runCapture(ws: Workspace, opts: CaptureOptions): Promise<R
   fs.mkdirSync(reportDir, { recursive: true });
   fs.writeFileSync(path.join(reportDir, `${runId}.json`), JSON.stringify({ run, results }, null, 2));
   return { run, results };
+}
+
+/**
+ * On the very first run discovery cannot know where curated click-steps lead (the library is empty), so a page it
+ * found may duplicate a curated screen captured in the same run. Later crawls skip those routes up front.
+ */
+function dropAutoDuplicates(library: Library): string[] {
+  const key = (s: { product: string; platform: string; theme: string; locale: string; route?: string }) => {
+    const u = new URL(s.route ?? '/', 'http://x');
+    return `${s.product}|${s.platform}|${s.theme}|${s.locale}|${routeKey(u)}`;
+  };
+  const curated = new Set(library.index.screens.filter((s) => !isAutoFlow(s.flow) && s.route && s.source === 'web' && s.status !== 'orphaned').map(key));
+  const dupes = library.index.screens
+    .filter((s) => isAutoFlow(s.flow) && s.route && (s.tags.includes('page') || s.tags.includes('detail')) && curated.has(key(s)))
+    .map((s) => s.id);
+  for (const id of dupes) library.remove(id);
+  return dupes;
 }
 
 function discoveredTitle(heading: string, title: string, fallback: string): string {

@@ -7,7 +7,7 @@ import { loadWorkspace, type Workspace } from '../config/load.js';
 import { parseTargets, runCapture } from '../capture/runner.js';
 import { authProfile, loadSession, sessionAgeDays } from '../capture/session.js';
 import type { FlowRecord, ScreenRecord, SectionRecord } from '../core/types.js';
-import { EXPORT_VARIANTS, exportScreens } from '../library/export.js';
+import { EXPORT_FORMATS, EXPORT_VARIANTS, exportScreens, SVG_MODES } from '../library/export.js';
 import { LibrarySearch, type ScreenFilters } from '../library/search.js';
 import { INDEX_FILE, isLfsPointer, Library } from '../library/store.js';
 import { preview } from '../process/images.js';
@@ -28,7 +28,7 @@ const INSTRUCTIONS = `Библиотека скриншотов продукто
 - search_screens — найти экраны по смыслу («сводка KPI», «карточка решения», «карта инспекторов»), фильтры: product, platform, pattern, element, brief.
 - search_flows — найти пользовательские сценарии (последовательности экранов).
 - search_sections — найти отдельные плашки/виджеты (PNG без фона со скруглёнными углами).
-- export_screen — получить готовые к слайдам файлы: clear (без фона приложения), cards (только плашки), framed (на фоне с отступами и тенью), layers (SVG со слоями для Figma).
+- export_screen — получить готовые к слайдам файлы: clear (без фона приложения), cards (только плашки), framed (на фоне с отступами и тенью), layers (растровые слои для Figma); format png (scale 1/2/3) или svg (vector — редактируемый текст и фигуры, raster — PNG внутри SVG).
 Встроенные картинки — превью низкого разрешения, только чтобы ты видел экран. Для слайдов/Figma бери полноразмерные файлы из files.* (абсолютные пути) или делай export_screen.
 Брифовые экраны презентации: brief = quality-check | executive-summary | decision-card | agent-work | customer-system-task.`;
 
@@ -92,9 +92,13 @@ export function createServer(root?: string): McpServer {
       clear: abs(s, x.files.clear?.path),
       cards: abs(s, x.files.cards?.path),
       full: abs(s, x.files.full?.path),
+      svg: abs(s, x.files.svg?.path),
+      clear_svg: abs(s, x.files.clearSvg?.path),
+      cards_svg: abs(s, x.files.cardsSvg?.path),
+      full_svg: abs(s, x.files.fullSvg?.path),
     },
     github_url: githubUrl(s, x.files.default.path),
-    sections: x.sections.map((sec) => ({ id: sec.id, name: sec.name, file: abs(s, sec.file.path) })),
+    sections: x.sections.map((sec) => ({ id: sec.id, name: sec.name, file: abs(s, sec.file.path), svg: abs(s, sec.svg?.path) })),
   });
 
   const sectionJson = (s: State, sec: SectionRecord, screen: ScreenRecord) => ({
@@ -109,6 +113,7 @@ export function createServer(root?: string): McpServer {
     product_name: productName(s, screen.product),
     platform: screen.platform,
     file: abs(s, sec.file.path),
+    svg: abs(s, sec.svg?.path),
     width: sec.file.width,
     height: sec.file.height,
   });
@@ -368,10 +373,14 @@ export function createServer(root?: string): McpServer {
     {
       title: 'Export screen',
       description:
-        'Подготовить файлы для слайдов/Figma: default, full, clear (без фона), cards (только плашки), framed (на фоне с отступом, скруглением и тенью), layers (SVG со слоями для Figma). Возвращает пути к файлам.',
+        'Подготовить файлы для слайдов/Figma: default, full, clear (без фона), cards (только плашки), framed (на фоне с отступом, скруглением и тенью), layers (растровые слои для Figma). ' +
+        'format: png (scale 1/2/3 — множитель к CSS-размеру; по умолчанию как снято) или svg (svg_mode vector — редактируемый текст и фигуры для Figma; raster — пиксель в пиксель). Возвращает пути к файлам.',
       inputSchema: {
         ids: z.array(z.string()).min(1).describe('id экранов или секций (<screenId>--<section>)'),
         variant: z.enum(EXPORT_VARIANTS),
+        format: z.enum(EXPORT_FORMATS).optional().describe('png (по умолчанию) или svg'),
+        svg_mode: z.enum(SVG_MODES).optional().describe('svg: vector (по умолчанию) или raster'),
+        scale: z.number().min(0.25).max(4).optional().describe('png: 1, 2, 3… к CSS-размеру; больше снятого не бывает'),
         background: z.string().optional().describe('framed: transparent | white | black | gradient | blur | #hex'),
         padding: z.number().optional().describe('CSS px вокруг экрана (framed/cards)'),
         radius: z.number().optional().describe('Скругление углов экрана, CSS px'),
@@ -388,6 +397,9 @@ export function createServer(root?: string): McpServer {
         const files = await exportScreens(s.library, {
           ids: a.ids,
           variant: a.variant,
+          format: a.format,
+          svgMode: a.svg_mode,
+          scale: a.scale,
           background: a.background,
           padding: a.padding,
           radius: a.radius,

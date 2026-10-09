@@ -39,6 +39,8 @@ capture:
     - "[class*='toast' i]"
 
 anonymize:
+  # Только чувствительные поля: имена людей, e-mail, логотипы заказчиков. Названия разделов, меню и вкладок
+  # остаются как есть (движок не применяет правила внутри nav/menu/tablist и к тексту, не похожему на значение).
   rules:
     # Имя текущего пользователя в сайдбаре/шапке («Саша Щеблыкин в левом нижнем углу»)
     - { selector: "[class*='user-name' i], [class*='username' i], [class*='profile-name' i]", kind: person }
@@ -46,7 +48,7 @@ anonymize:
   images:
     - { selector: "[class*='avatar' i] img, img[class*='avatar' i]", with: avatar }
     - { selector: "img[src*='momra' i], img[src*='balady' i], img[alt*='momra' i], img[alt*='balady' i]", with: logo }
-    # Кастомный логотип клиента (logo customization) — меняем на нейтральную «A»
+    # Кастомный логотип клиента (logo customization) — меняем на логотип Axion (assets/anonymize/logo.svg)
     - { selector: "[class*='org-logo' i] img, [class*='tenant-logo' i] img, [class*='custom-logo' i] img", with: logo }
   network:
     # Все JSON-ответы API проходят через словарь до отрисовки (графики на canvas, карты, тултипы)

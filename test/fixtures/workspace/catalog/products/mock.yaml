@@ -20,6 +20,9 @@ anonymize:
     - { selector: ".inspector-name", kind: person }
     - { selector: ".phone", kind: digits }
     - { selector: ".plate", kind: chars }
+    # The kind of selector that scrambled real sidebars: it also matches "transition-[grid-template-rows]"
+    # on the collapsible Planning group and "template-list" on the templates page. Must stay harmless.
+    - { selector: "[class*='plate' i]", kind: chars }
   images:
     - { selector: "img.avatar", with: avatar }
     - { selector: "img.org-logo", with: logo }

@@ -59,10 +59,20 @@ export async function fitExact(png: Buffer, width: number, height: number): Prom
 
 /** Cut fully transparent borders (used for the .cards variant). */
 export async function trimTransparent(png: Buffer, margin = 0): Promise<Buffer> {
+  return (await trimTransparentBox(png, margin)).buffer;
+}
+
+/** Same, plus where the kept region was in the original (device px) — the cards SVG uses it as its viewBox. */
+export async function trimTransparentBox(png: Buffer, margin = 0): Promise<{ buffer: Buffer; box: Rect }> {
   try {
-    return await sharp(png).trim({ background: { r: 0, g: 0, b: 0, alpha: 0 }, threshold: 1, margin }).png().toBuffer();
+    const { data, info } = await sharp(png)
+      .trim({ background: { r: 0, g: 0, b: 0, alpha: 0 }, threshold: 1, margin })
+      .png()
+      .toBuffer({ resolveWithObject: true });
+    return { buffer: data, box: { x: -(info.trimOffsetLeft ?? 0), y: -(info.trimOffsetTop ?? 0), width: info.width, height: info.height } };
   } catch {
-    return png; // fully transparent or nothing to trim
+    const { width, height } = await size(png); // fully transparent or nothing to trim
+    return { buffer: png, box: { x: 0, y: 0, width, height } };
   }
 }
 

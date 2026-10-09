@@ -10,7 +10,10 @@ export interface DomAnonConfig {
   images: { selector: string; with: string; dataUri?: string }[];
   blur: string[];
   hide: string[];
+  /** Replacement for client logos on light backgrounds… */
   logoDataUri: string;
+  /** …and on dark ones (sidebars, dark headers). */
+  logoOnDarkDataUri: string;
   attributes: string[];
 }
 
@@ -92,6 +95,43 @@ export function createDomAnonymizer(pipe: TextPipeline, cfg: DomAnonConfig): Dom
     }
   }
 
+  // Navigation, menus, tabs and trees hold section names: selector rules never rewrite them. Only the
+  // identity of the signed-in user (person / email) is replaced there — it often sits inside the sidebar nav.
+  const STRUCTURAL = 'nav, [role=navigation], [role=menu], [role=menubar], [role=tablist], [role=tree]';
+  const IDENTITY = new Set(['person', 'email']);
+  // A rule targets one value (a name, a plate, a phone). A match with a lot of text is a container that the
+  // selector caught by accident (e.g. [class*=plate] on "transition-[grid-template-rows]") — leave it alone.
+  const MAX_VALUE = 160;
+  const DIGIT = /[0-9٠-٩۰-۹]/;
+  const UI_WORDS = new Set(['user', 'username', 'user name', 'name', 'full name', 'profile', 'account', 'admin', 'guest', 'me', 'you', 'имя', 'пользователь', 'профиль', 'аккаунт', 'الاسم', 'المستخدم']);
+
+  /** Does the value look like what the rule is meant to replace? Labels and headings next to the value do not. */
+  function plausible(kind: PipelineKind, value: string): boolean {
+    const v = value.trim();
+    switch (kind) {
+      case 'chars':
+        // Plates, IBANs, document numbers: digits, no lowercase words ("Route 66 checklist" is a title, not a plate)
+        return DIGIT.test(v) && v.length <= 40 && !/\p{Ll}/u.test(v);
+      case 'digits':
+        return DIGIT.test(v);
+      case 'email':
+        return v.includes('@');
+      case 'person':
+        return (
+          v.length <= 64 &&
+          !DIGIT.test(v) &&
+          !v.includes('@') &&
+          /\p{L}/u.test(v) &&
+          v.split(/\s+/).length <= 6 &&
+          !UI_WORDS.has(v.toLowerCase().replace(/[:：]$/, ''))
+        );
+      case 'org':
+        return /\p{L}/u.test(v) && v.length <= 120;
+      default:
+        return true; // text / lorem — explicit fixed replacements
+    }
+  }
+
   /** Selector rules replace every text chunk of the element by kind (whitespace around is kept). */
   function applyRules(root: Document | ShadowRoot) {
     for (const rule of cfg.rules) {
@@ -101,17 +141,22 @@ export function createDomAnonymizer(pipe: TextPipeline, cfg: DomAnonConfig): Dom
       } catch {
         continue;
       }
+      const limited = rule.kind !== 'text' && rule.kind !== 'lorem';
+      const structural = !IDENTITY.has(rule.kind);
       els.forEach((el) => {
+        if (limited && (el.textContent ?? '').trim().length > MAX_VALUE) return;
+        if (structural && el.closest(STRUCTURAL)) return;
         for (const t of textNodes(el)) {
           const v = t.nodeValue ?? '';
           const core = v.trim();
-          if (!core || pipe.generated.has(core.toLowerCase())) continue;
+          if (!core || pipe.generated.has(core.toLowerCase()) || !plausible(rule.kind, core)) continue;
+          if (structural && t.parentElement?.closest(STRUCTURAL)) continue;
           const lead = v.slice(0, v.indexOf(core));
           const trail = v.slice(v.indexOf(core) + core.length);
           t.nodeValue = lead + pipe.byKind(rule.kind, core, rule.value) + trail;
           stats.replacements++;
         }
-        if (el instanceof HTMLInputElement && el.value && !pipe.generated.has(el.value.toLowerCase())) {
+        if (el instanceof HTMLInputElement && el.value && !pipe.generated.has(el.value.toLowerCase()) && plausible(rule.kind, el.value)) {
           el.value = pipe.byKind(rule.kind, el.value, rule.value);
           stats.replacements++;
         }
@@ -137,6 +182,35 @@ export function createDomAnonymizer(pipe: TextPipeline, cfg: DomAnonConfig): Dom
     return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
   }
 
+  let probe: CanvasRenderingContext2D | null | undefined;
+  /** Any CSS color (rgb, oklch, color(display-p3 …)) → sRGB bytes + alpha 0..1. */
+  function rgba(color: string): [number, number, number, number] | null {
+    if (probe === undefined) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 1;
+      probe = c.getContext('2d', { willReadFrequently: true });
+    }
+    if (!probe) return null;
+    probe.clearRect(0, 0, 1, 1);
+    probe.fillStyle = '#000';
+    probe.fillStyle = color;
+    probe.fillRect(0, 0, 1, 1);
+    const d = probe.getImageData(0, 0, 1, 1).data;
+    return [d[0], d[1], d[2], d[3] / 255];
+  }
+
+  /** The first sufficiently opaque background behind the element decides which logo version is readable. */
+  function onDarkBackground(el: Element): boolean {
+    for (let n: Element | null = el; n; n = n.parentElement) {
+      const bg = getComputedStyle(n).backgroundColor;
+      if (!bg || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)') continue;
+      const c = rgba(bg);
+      if (!c || c[3] < 0.5) continue;
+      return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] < 128;
+    }
+    return false;
+  }
+
   function swapImage(el: Element, rule: { with: string; dataUri?: string }) {
     if (el.getAttribute('data-scrn-img')) return;
     el.setAttribute('data-scrn-img', '1');
@@ -152,18 +226,29 @@ export function createDomAnonymizer(pipe: TextPipeline, cfg: DomAnonConfig): Dom
       stats.images++;
       return;
     }
+    const logo = () => (onDarkBackground(el) ? cfg.logoOnDarkDataUri : cfg.logoDataUri);
     const src =
       rule.with === 'avatar'
         ? initialsAvatar(el.getAttribute('alt') || el.getAttribute('src') || el.textContent || '')
         : rule.with === 'logo'
-          ? cfg.logoDataUri
-          : (rule.dataUri ?? cfg.logoDataUri);
+          ? logo()
+          : (rule.dataUri ?? logo());
     if (el instanceof HTMLImageElement) {
+      // Keep the box the original image had: the replacement has another intrinsic size and must not move the layout.
+      const box = el.getBoundingClientRect();
+      if (box.width > 0 && box.height > 0) {
+        style.setProperty('width', `${box.width}px`, 'important');
+        style.setProperty('height', `${box.height}px`, 'important');
+      }
       el.removeAttribute('srcset');
       const picture = el.parentElement;
       if (picture && picture.tagName === 'PICTURE') picture.querySelectorAll('source').forEach((s) => s.remove());
       el.src = src;
       style.setProperty('object-fit', 'contain', 'important');
+      // A wordmark slot (wide box) keeps the mark at its start edge, like the original logo; square slots center it.
+      if (rule.with !== 'avatar' && box.width > box.height * 2) {
+        style.setProperty('object-position', getComputedStyle(el).direction === 'rtl' ? 'right center' : 'left center', 'important');
+      }
     } else if (el instanceof SVGElement && el.tagName.toLowerCase() === 'svg') {
       const r = el.getBoundingClientRect();
       const img = document.createElement('img');
@@ -172,12 +257,15 @@ export function createDomAnonymizer(pipe: TextPipeline, cfg: DomAnonConfig): Dom
       img.style.width = `${r.width}px`;
       img.style.height = `${r.height}px`;
       img.style.objectFit = 'contain';
+      if (r.width > r.height * 2) img.style.objectPosition = getComputedStyle(el).direction === 'rtl' ? 'right center' : 'left center';
       el.replaceWith(img);
     } else {
+      const r = el.getBoundingClientRect();
+      const start = rule.with !== 'avatar' && r.width > r.height * 2;
       style.setProperty('background-image', `url("${src}")`, 'important');
       style.setProperty('background-size', 'contain', 'important');
       style.setProperty('background-repeat', 'no-repeat', 'important');
-      style.setProperty('background-position', 'center', 'important');
+      style.setProperty('background-position', start ? (getComputedStyle(el).direction === 'rtl' ? 'right center' : 'left center') : 'center', 'important');
     }
     stats.images++;
   }

@@ -1,9 +1,9 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { discoveredFlow, routeShape } from '../src/capture/discover.js';
+import { assignSections, discoveredFlows, roleSelector, routeKey, routeShape, type DiscoveredKind } from '../src/capture/discover.js';
 import { expectedIds, parseTargets, planJobs, resolveStep } from '../src/capture/runner.js';
 import { interpolateEnv, loadWorkspace } from '../src/config/load.js';
-import { ActionSchema } from '../src/config/schema.js';
+import { ActionSchema, type Action } from '../src/config/schema.js';
 import { humanFileName, screenId, variantPath } from '../src/core/naming.js';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -67,15 +67,57 @@ describe('naming', () => {
     expect(routeShape('/library/AZ1R6M9Of9iGWIPvFDXrqQ/axion_sense.frames')).toBe('/library/:id/axion_sense.frames');
   });
 
-  it('turns crawled pages into a valid synthetic flow with unique step ids', () => {
-    const flow = discoveredFlow(
-      [
-        { url: 'x', route: '/9/inspectors', text: 'Inspectors', depth: 1 },
-        { url: 'y', route: '/9/inspectors?tab=map', text: '', depth: 1 },
-      ],
+  it('turns crawled pages into one valid flow per section with unique step ids', () => {
+    const page = (route: string, name: string, section: string, kind: DiscoveredKind = 'page', actions: Action[] = []) => ({
+      route,
+      name,
+      kind,
+      actions,
+      section,
+      sectionName: section[0].toUpperCase() + section.slice(1),
+    });
+    const flows = discoveredFlows(
+      {
+        visited: 3,
+        notes: [],
+        steps: [
+          page('/9/inspectors', 'Inspectors', 'inspectors'),
+          page('/9/inspectors?tab=map', 'Map', 'inspectors'),
+          page('/9/inspectors', 'Inspectors · Map', 'inspectors', 'tab', [{ kind: 'click', arg: 'role=tab[name="Map"s]' }]),
+          page('/9/planning/schedule', 'Schedule', 'planning'),
+        ],
+      },
       ['desktop'],
     );
-    expect(flow?.id).toBe('_discovered');
-    expect(flow?.steps.map((s) => s.id)).toEqual(['9-inspectors', '9-inspectors-2']);
+    expect(flows.map((f) => f.id)).toEqual(['_inspectors', '_planning']);
+    expect(flows[0].steps.map((s) => s.id)).toEqual(['9-inspectors', '9-inspectors-tab-map', '9-inspectors-tab-map-2']);
+    expect(flows[0].steps[2].actions).toEqual([{ kind: 'click', arg: 'role=tab[name="Map"s]' }]);
+  });
+
+  it('builds role selectors that survive counters in tab names', () => {
+    expect(roleSelector('tab', 'Map')).toBe('role=tab[name="Map"s]');
+    expect(roleSelector('tab', 'Violations 12')).toBe('role=tab[name=/^Violations/]');
+  });
+
+  it('keeps meaningful query params in route keys and collapses ids', () => {
+    expect(routeKey(new URL('https://h/9/frames?imageQuality=rejected'))).toBe('/9/frames?imageQuality=rejected');
+    expect(routeKey(new URL('https://h/9/inspectors/38717?page=2'))).toBe('/9/inspectors/:id?page=:v');
+  });
+});
+
+describe('discovery of a shared app', () => {
+  it('splits sections of one app (C&C + Sense) between products by the routes their catalogs open', () => {
+    const ws = loadWorkspace({ root });
+    const cnc = ws.products.find((p) => p.id === 'cnc')!;
+    const sense = ws.products.find((p) => p.id === 'sense')!;
+    expect(cnc.auth.profile).toBe(sense.auth.profile);
+    expect(new URL(cnc.environments.stage.baseUrl).origin).toBe(new URL(sense.environments.stage.baseUrl).origin);
+    const step = (route: string, section: string) => ({ route, name: section, kind: 'page' as const, actions: [], section, sectionName: section });
+    const owner = assignSections(
+      [step('/9/inspectors/38717', 'inspectors'), step('/frames?imageQuality=rejected', 'frames'), step('/frames/42', 'frames'), step('/9/planning', 'planning')],
+      [cnc, sense],
+      'stage',
+    );
+    expect(Object.fromEntries(owner)).toEqual({ inspectors: 'cnc', frames: 'sense', planning: 'cnc' });
   });
 });

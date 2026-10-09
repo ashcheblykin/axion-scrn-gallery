@@ -2,7 +2,7 @@ import path from 'node:path';
 import type { Workspace } from '../config/load.js';
 import type { Flow } from '../config/schema.js';
 import { launchBrowser } from '../capture/browser.js';
-import { crawl, discoveredFlow, writeSuggestions } from '../capture/discover.js';
+import { discoverProducts, writeSuggestions } from '../capture/discover.js';
 import { runCapture, type RunResult } from '../capture/runner.js';
 import { buildGallery } from '../gallery/build.js';
 import { Library } from '../library/store.js';
@@ -42,29 +42,33 @@ export async function runRefresh(ws: Workspace, o: RefreshOptions): Promise<Refr
   const log = o.log;
   const browser = await launchBrowser(ws.config, { headed: o.headed });
   const extraFlows: { product: string; flow: Flow }[] = [];
+  const discovered: string[] = [];
   let capture: RunResult;
   try {
     if (o.discover !== false) {
-      for (const product of ws.products) {
-        if (o.products?.length && !o.products.includes(product.id)) continue;
-        if (product.discover.maxPages <= 0) continue;
-        try {
-          const pages = await crawl(ws, browser, product, { env, log });
-          const flow = discoveredFlow(pages, ['desktop']);
-          if (flow) {
-            extraFlows.push({ product: product.id, flow });
-            writeSuggestions(ws, product, flow);
-            log.dim(`${product.id}: вне каталога — ${plural(pages.length, ['раздел', 'раздела', 'разделов'])}`);
-          }
-        } catch (err) {
-          log.warn(`${product.id}: обход навигации не удался — ${errorMessage(err)}`);
+      try {
+        // All products take part (sections of a shared app are split between them), the filter applies after.
+        for (const d of await discoverProducts(ws, browser, ws.products, { env, log, only: o.products })) {
+          if (o.products?.length && !o.products.includes(d.product.id)) continue;
+          for (const n of d.notes) log.warn(n);
+          discovered.push(d.product.id);
+          extraFlows.push(...d.flows.map((flow) => ({ product: d.product.id, flow })));
+          writeSuggestions(ws, d.product, d.flows);
+          const screens = d.flows.reduce((n, f) => n + f.steps.length, 0);
+          log.dim(
+            `${d.product.id}: обход${d.visited ? ` — ${plural(d.visited, ['страница', 'страницы', 'страниц'])}` : ''}, ` +
+              `${plural(d.flows.length, ['флоу', 'флоу', 'флоу'])} по разделам, ${plural(screens, ['экран', 'экрана', 'экранов'])} вне каталога`,
+          );
         }
+      } catch (err) {
+        log.warn(`обход навигации не удался — ${errorMessage(err)}`);
       }
     }
     capture = await runCapture(ws, {
       env,
       targets: o.products?.map((p) => ({ product: p })),
       extraFlows,
+      discoveredProducts: discovered,
       markOrphans: !o.products?.length,
       force: o.force,
       concurrency: o.concurrency,

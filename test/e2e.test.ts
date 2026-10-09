@@ -6,7 +6,7 @@ import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createNodePipeline } from '../src/capture/anonymize.js';
 import { launchBrowser } from '../src/capture/browser.js';
-import { crawl, discoveredFlow } from '../src/capture/discover.js';
+import { crawl, discoveredFlows } from '../src/capture/discover.js';
 import { runCapture } from '../src/capture/runner.js';
 import { loadWorkspace, type Workspace } from '../src/config/load.js';
 import { buildGallery } from '../src/gallery/build.js';
@@ -79,6 +79,39 @@ describe('capture → library (mock app)', () => {
     expect(dash.text).toContain('@example.com');
     // /api/me matches two network rules: both apply (anonymize + merge)
     expect(dash.text).toContain('Axion Demo City');
+
+    // Navigation stays readable even though "[class*='plate' i]" also matches its collapsible group
+    const planning = library.get('mock.desktop.inspectors.list')!;
+    expect(planning.text).toContain('Inspectors');
+    const inspectorsText = planning.text ?? '';
+    expect(inspectorsText).not.toContain('ABC 1234'); // the real plate is still scrambled
+    expect(inspectorsText).not.toMatch(/Ahmed|Al-Qahtani/);
+  });
+
+  it('stores editable SVG twins: text as text, anonymized, no URLs or debug attributes', async () => {
+    const library = Library.open(ws.paths.library);
+    const dash = library.get('mock.desktop.executive-summary.dashboard')!;
+    expect(dash.files.svg).toMatchObject({ path: 'mock/desktop/executive-summary/01-dashboard.svg', width: 1280, height: 720 });
+    expect(dash.files.clearSvg?.path).toBe('mock/desktop/executive-summary/01-dashboard.clear.svg');
+    expect(dash.files.cardsSvg?.path).toBe('mock/desktop/executive-summary/01-dashboard.cards.svg');
+    expect(dash.files.fullSvg?.height).toBeGreaterThan(720);
+    expect(dash.sections.every((x) => x.svg?.path.endsWith('.svg'))).toBe(true);
+
+    const svg = fs.readFileSync(library.abs(dash.files.svg!.path), 'utf8');
+    expect(svg).toContain('<text');
+    expect(svg).toContain('Executive summary');
+    expect(svg).toMatch(/<image[^>]+xlink:href="data:image\/png;base64,/); // the canvas chart, as a raster patch
+    expect(svg).toContain('filter="url(#shadow'); // KPI card shadows
+    expect(svg).not.toMatch(/Shcheblykin|Varvara|MOMRA|Balady|axionx\.ai|127\.0\.0\.1|data-stacking|aria-|<a /);
+    // The Axion mark replaced the client logo — inlined as vector shapes
+    expect(svg).toContain('M116.884 91.8565');
+
+    // cards: chrome gone, viewBox trimmed to the content
+    const cards = fs.readFileSync(library.abs(dash.files.cardsSvg!.path), 'utf8');
+    expect(cards).not.toMatch(/Log out|Assistant|Planning/); // sidebar items
+    const vb = /viewBox="([^"]+)"/.exec(cards)![1].split(' ').map(Number);
+    expect(vb[0]).toBeGreaterThan(200); // sidebar (220px) is not part of it
+    expect(vb[2]).toBeLessThan(1280);
   });
 
   it('does not create versions for unchanged screens and does for changed data', async () => {
@@ -91,24 +124,58 @@ describe('capture → library (mock app)', () => {
     mock.setVersion(1);
   });
 
-  it('discovers sections that are not in the catalog', async () => {
+  it('walks the app like a person: collapsed groups, href-less items, tabs, panels, details — never a destructive click', async () => {
     const browser = await launchBrowser(ws.config);
     try {
-      const pages = await crawl(ws, browser, ws.products[0], { env: 'stage', log: silentLogger });
-      expect(pages.map((p) => p.route)).toEqual(['/decision/42']);
-      const flow = discoveredFlow(pages, ['desktop'])!;
+      const found = await crawl(ws, browser, ws.products[0], { env: 'stage', log: silentLogger });
+      const flows = discoveredFlows(found, ['desktop']);
+      const byId = Object.fromEntries(flows.map((f) => [f.id, f]));
+      expect(Object.keys(byId).sort()).toEqual(['_inspectors', '_planning', '_reports']);
+
+      // The collapsed "Planning" group becomes a flow of its own, with tab and panel states
+      expect(byId._planning.name).toBe('Planning');
+      expect(byId._planning.steps.map((x) => x.name)).toEqual([
+        'Inspections & schedule',
+        'Inspections & schedule · List',
+        'Inspections & schedule · Map',
+        'Inspections & schedule · Filters',
+        'Templates',
+      ]);
+      expect(byId._planning.steps[1]).toMatchObject({ id: 'planning-schedule-tab-list', url: '/planning/schedule' });
+      // A menu item without href (click handler only) is found by clicking it
+      expect(byId._reports.steps.map((x) => x.url)).toEqual(['/reports']);
+      // Detail page behind a table link (curated list itself is not repeated) + its tab; names are anonymized
+      expect(byId._inspectors.steps.map((x) => x.url)).toEqual(['/inspectors/i1', '/inspectors/i1']);
+      expect(byId._inspectors.steps.map((x) => x.name).join(' ')).not.toMatch(/Ahmed|Qahtani/);
+      expect(byId._inspectors.steps[1].name).toMatch(/· Violations$/);
+      // Delete / Approve / Reject were never pressed
+      expect(mock.dangerousClicks()).toEqual([]);
+
       const { results } = await runCapture(ws, {
         targets: [{ product: 'mock' }],
-        extraFlows: [{ product: 'mock', flow }],
+        extraFlows: flows.map((flow) => ({ product: 'mock', flow })),
         onlyExtra: true,
         platforms: ['desktop'],
         browser,
         log: silentLogger,
       });
-      expect(results).toMatchObject([{ id: 'mock.desktop._discovered.decision-42', outcome: 'added' }]);
-      expect(Library.open(ws.paths.library).get('mock.desktop._discovered.decision-42')?.files.default.path).toBe(
-        'mock/desktop/_discovered/decision-42.png',
-      );
+      expect(results.length).toBe(8);
+      expect(results.every((r) => r.outcome === 'added')).toBe(true);
+      const library = Library.open(ws.paths.library);
+      const list = library.get('mock.desktop._planning.planning-schedule-tab-list')!;
+      expect(list.files.default.path).toBe('mock/desktop/_planning/planning-schedule-tab-list.png');
+      expect(list.title).toBe('Inspections & schedule · List');
+      expect(list.text).toContain('North zone'); // the List tab is what got captured
+      expect(library.get('mock.desktop._planning.planning-schedule-panel-filters')!.text).toContain('Zone · Inspector · Date');
+      // section names stay readable on every screen, the plate on the detail page does not
+      const detail = library.get('mock.desktop._inspectors.inspectors-id')!;
+      expect(detail.text).toMatch(/Planning[\s\S]*Reports/);
+      // …including the items of the open "Planning" group (its container matches [class*='plate' i])
+      expect(list.text).toContain('Inspections & schedule\nTemplates');
+      expect(detail.text).not.toContain('ABC 1234');
+      library.rebuildFlows(ws.products);
+      expect(library.index.flows.find((f) => f.id === 'mock.desktop._planning')?.steps).toHaveLength(5);
+      expect(mock.dangerousClicks()).toEqual([]);
     } finally {
       await browser.close();
     }
@@ -117,27 +184,71 @@ describe('capture → library (mock app)', () => {
   it('exports presentation variants with human-readable names', async () => {
     const library = Library.open(ws.paths.library);
     const out = path.join(root, 'exports-test');
+    const dash = 'mock.desktop.executive-summary.dashboard';
     const files = [
-      ...(await exportScreens(library, { ids: ['mock.desktop.executive-summary.dashboard'], variant: 'framed', background: 'blur', outDir: out })),
-      ...(await exportScreens(library, { ids: ['mock.desktop.executive-summary.dashboard'], variant: 'cards', outDir: out })),
-      ...(await exportScreens(library, { ids: ['mock.desktop.executive-summary.dashboard'], variant: 'layers', outDir: out })),
-      ...(await exportScreens(library, { ids: ['mock.desktop.executive-summary.dashboard--kpi-card'], variant: 'framed', outDir: out })),
+      ...(await exportScreens(library, { ids: [dash], variant: 'framed', background: 'blur', outDir: out })),
+      ...(await exportScreens(library, { ids: [dash], variant: 'cards', outDir: out })),
+      ...(await exportScreens(library, { ids: [dash], variant: 'layers', outDir: out })),
+      ...(await exportScreens(library, { ids: [`${dash}--kpi-card`], variant: 'framed', outDir: out })),
+      ...(await exportScreens(library, { ids: [dash], variant: 'default', scale: 1, outDir: out })),
+      ...(await exportScreens(library, { ids: [dash], variant: 'clear', format: 'svg', outDir: out })),
+      ...(await exportScreens(library, { ids: [dash], variant: 'framed', format: 'svg', outDir: out })),
+      ...(await exportScreens(library, { ids: [dash], variant: 'default', format: 'svg', svgMode: 'raster', outDir: out })),
+      ...(await exportScreens(library, { ids: ['mock.mobile.inspectors.list'], variant: 'default', scale: 2, outDir: out })),
     ];
     expect(files.map((f) => path.basename(f.file))).toEqual([
-      'Mock App · Executive summary · 01 Dashboard (desktop, en, framed).png',
-      'Mock App · Executive summary · 01 Dashboard (desktop, en, cards).png',
+      'Mock App · Executive summary · 01 Dashboard (desktop, en, framed)@2x.png',
+      'Mock App · Executive summary · 01 Dashboard (desktop, en, cards)@2x.png',
       'Mock App · Executive summary · 01 Dashboard (desktop, en, layers).svg',
-      'Mock App · Executive summary · 01 Dashboard — KPI card (desktop, en, framed).png',
+      'Mock App · Executive summary · 01 Dashboard — KPI card (desktop, en, framed)@2x.png',
+      'Mock App · Executive summary · 01 Dashboard (desktop, en).png',
+      'Mock App · Executive summary · 01 Dashboard (desktop, en, clear).svg',
+      'Mock App · Executive summary · 01 Dashboard (desktop, en, framed).svg',
+      'Mock App · Executive summary · 01 Dashboard (desktop, en, raster).svg',
+      'Mock App · Inspectors · 01 Inspectors (mobile, en)@2x.png',
     ]);
-    const svg = fs.readFileSync(files[2].file, 'utf8');
-    expect(svg).toContain('<g id="content-no-background">');
+    expect(fs.readFileSync(files[2].file, 'utf8')).toContain('<g id="content-no-background">');
+    expect((await sharp(files[4].file).metadata()).width).toBe(1280); // 1x of a 1280×720 viewport
+    expect((await sharp(files[8].file).metadata()).width).toBe(786); // iPhone 393 pt × 2
+    const framed = fs.readFileSync(files[6].file, 'utf8');
+    expect(framed).toContain('mask="url(#frame-mask)"');
+    expect(framed).toContain('<text'); // still editable inside the frame
+    expect(fs.readFileSync(files[7].file, 'utf8')).toContain('xlink:href="data:image/png;base64,');
+    // asking for more pixels than were captured is capped, and said so
+    const [capped] = await exportScreens(library, { ids: [dash], variant: 'default', scale: 3, outDir: out });
+    expect(capped.scale).toBe(2);
+    expect(capped.notes.join(' ')).toMatch(/@2x/);
+  });
+
+  it('serves the gallery with an export API (any scale, SVG, backgrounds)', async () => {
+    const { serveLibrary } = await import('../src/cli/serve.js');
+    const server = await serveLibrary(ws.paths.library, 0);
+    const { port } = server.address() as import('node:net').AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+    try {
+      expect(await (await fetch(`${base}/api/ping`)).json()).toMatchObject({ ok: true, export: true });
+      const r = await fetch(`${base}/api/export?id=mock.desktop.executive-summary.dashboard&variant=clear&format=png&scale=1`);
+      expect(r.status).toBe(200);
+      expect(r.headers.get('content-type')).toBe('image/png');
+      expect(r.headers.get('content-disposition')).toContain("filename*=UTF-8''Mock%20App%20%C2%B7%20Executive%20summary");
+      expect((await sharp(Buffer.from(await r.arrayBuffer())).metadata()).width).toBe(1280);
+      const svg = await fetch(`${base}/api/export?id=mock.desktop.executive-summary.dashboard--kpi-grid&format=svg`);
+      expect(svg.headers.get('content-type')).toBe('image/svg+xml');
+      expect(await svg.text()).toContain('<text');
+      const bad = await fetch(`${base}/api/export?id=nope`);
+      expect(bad.status).toBe(422);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
   it('builds the gallery', () => {
     const file = buildGallery(ws, Library.open(ws.paths.library).index);
     const html = fs.readFileSync(file, 'utf8');
     expect(html).toContain('mock.desktop.executive-summary.dashboard');
-    expect(html).not.toContain('__DATA__');
+    expect(html).not.toMatch(/__DATA__|__MARK__|__FAVICON__/);
+    expect(html).toContain('M116.884 91.8565'); // Axion mark in the header
+    expect(html).toContain('api/export?');
   });
 });
 

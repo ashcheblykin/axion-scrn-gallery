@@ -153,6 +153,10 @@
           "default": true,
           "type": "boolean"
         },
+        "svg": {
+          "default": true,
+          "type": "boolean"
+        },
         "thumbWidth": {
           "default": 720,
           "type": "integer",

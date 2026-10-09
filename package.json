@@ -1,7 +1,7 @@
 {
   "name": "axion-scrn",
   "version": "0.1.0",
-  "description": "Mobbin-like screenshot library engine for Axion products (Gen, Command & Control, Sense): flows, retina captures, anonymization, versioning, MCP.",
+  "description": "Mobbin-like screenshot library engine for Axion products (Gen, Command & Control, Sense): flows, retina captures, editable SVG, anonymization, versioning, MCP.",
   "type": "module",
   "private": true,
   "license": "UNLICENSED",
@@ -12,7 +12,7 @@
     "node": ">=22.12"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-inpage.mjs",
     "prepare": "npm run build",
     "dev": "tsx src/cli/index.ts",
     "scrn": "node dist/cli/index.js",
@@ -39,6 +39,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.20.4",
+    "dom-to-svg": "0.12.2",
+    "esbuild": "0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3"

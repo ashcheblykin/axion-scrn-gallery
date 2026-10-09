@@ -53,11 +53,17 @@ export async function withExpandedViewport<T>(page: Page, maxHeight: number, fn:
   }
 }
 
-export async function shootFull(page: Page, maxHeight: number): Promise<{ buffer: Buffer; height: number }> {
-  return withExpandedViewport(page, maxHeight, async (height) => ({
-    buffer: await page.screenshot({ ...SHOT, fullPage: true }),
-    height,
-  }));
+/** The whole page; `during` runs while the viewport is still expanded (the vector version of the same state). */
+export async function shootFull<T = undefined>(
+  page: Page,
+  maxHeight: number,
+  during?: () => Promise<T>,
+): Promise<{ buffer: Buffer; height: number; extra?: T }> {
+  return withExpandedViewport(page, maxHeight, async (height) => {
+    const buffer = await page.screenshot({ ...SHOT, fullPage: true });
+    const extra = during ? await during() : undefined;
+    return { buffer, height, extra };
+  });
 }
 
 function clearCss(backdrop: string[], chrome: string[] = []): string {

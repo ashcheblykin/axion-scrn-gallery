@@ -29,6 +29,8 @@ export interface SectionRecord {
   tags: string[];
   file: ImageFile;
   thumb?: ImageFile;
+  /** Editable vector version (width/height in CSS px). */
+  svg?: ImageFile;
 }
 
 export interface ScreenRecord {
@@ -61,6 +63,11 @@ export interface ScreenRecord {
     full?: ImageFile;
     clear?: ImageFile;
     cards?: ImageFile;
+    /** Editable vector versions (text as text, cards as shapes); width/height in CSS px. */
+    svg?: ImageFile;
+    fullSvg?: ImageFile;
+    clearSvg?: ImageFile;
+    cardsSvg?: ImageFile;
   };
   sections: SectionRecord[];
   viewport: { width: number; height: number; scale: number };
@@ -82,6 +89,8 @@ export interface ScreenRecord {
     substitutes?: string[];
     audit?: PrivacyAudit;
   };
+  /** What the pixels depend on besides the app (engine version, anonymization rules, dictionary, logo). */
+  fingerprint?: string;
   tagging?: { source: 'claude-code' | 'claude-api' | 'heuristics'; model?: string; at: string; hash: string };
   quality?: { cutOff?: boolean; emptyState?: boolean; loading?: boolean; broken?: boolean; notes?: string };
   suggestedUse?: string[];
@@ -173,9 +182,21 @@ export interface CapturedScreen {
     full?: Buffer;
     clear?: Buffer;
     cards?: Buffer;
-    sections: { id: string; name: string; description?: string; patterns: string[]; elements: string[]; tags: string[]; buffer: Buffer }[];
+    /** Vector twins of the raster variants. */
+    svg?: { default?: string; full?: string; clear?: string; cards?: string };
+    sections: {
+      id: string;
+      name: string;
+      description?: string;
+      patterns: string[];
+      elements: string[];
+      tags: string[];
+      buffer: Buffer;
+      svg?: string;
+    }[];
   };
   /** Regions (device px) excluded from the change detection: clocks, live maps… */
   ignoreRects: Rect[];
+  fingerprint?: string;
   anonymization: { replacements: number; images: number; violations: string[]; substitutes?: string[] };
 }

@@ -2,11 +2,16 @@
  * Mock of an Axion web app for end-to-end tests: SPA shell with a sidebar, inner scroll container,
  * API-driven data full of things that must never reach a published screen (real names, client
  * names, phones, e-mails, client logo), a login form and a cookie session.
+ *
+ * Navigation is deliberately awkward, like the real stands: a collapsible "Planning" group whose items exist
+ * only while it is open (and whose container carries a Tailwind-like `transition-[grid-template-rows]` class),
+ * a menu item without href, in-page tabs without URLs, a filters drawer, detail pages behind table rows and
+ * destructive buttons that discovery must never press (`/__admin/danger` counts the presses).
  */
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-const state = { version: 1 };
+const state = { version: 1, danger: [] as string[] };
 
 const MOMRA_LOGO = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="32"><rect width="120" height="32" rx="6" fill="#0a7d3b"/><text x="10" y="21" font-size="14" fill="#fff" font-family="Arial">MOMRA</text></svg>`;
 const AVATAR = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="#c0392b"/><text x="14" y="42" font-size="28" fill="#fff" font-family="Arial">AS</text></svg>`;
@@ -29,15 +34,25 @@ function api(path: string): unknown {
         status: 'BALADY_APPROVED',
       };
     case '/api/inspectors':
+      return INSPECTORS;
+    case '/api/templates':
       return [
-        { id: 'i1', name: 'Ahmed Al-Qahtani', phone: '+966 55 123 4567', plate: 'ABC 1234', zone: 'North' },
-        { id: 'i2', name: 'محمد العتيبي', phone: '+966 50 765 4321', plate: 'XYZ 9876', zone: 'East' },
-        { id: 'i3', name: 'Varvara Spirina', phone: '+966 54 222 3333', plate: 'KLM 5555', zone: 'West' },
+        { id: 't1', title: 'Weekly inspection' },
+        { id: 't2', title: 'Night shift' },
       ];
-    default:
+    default: {
+      const m = /^\/api\/inspectors\/(\w+)$/.exec(path);
+      if (m) return INSPECTORS.find((i) => i.id === m[1]) ?? null;
       return null;
+    }
   }
 }
+
+const INSPECTORS = [
+  { id: 'i1', name: 'Ahmed Al-Qahtani', phone: '+966 55 123 4567', plate: 'ABC 1234', zone: 'North' },
+  { id: 'i2', name: 'محمد العتيبي', phone: '+966 50 765 4321', plate: 'XYZ 9876', zone: 'East' },
+  { id: 'i3', name: 'Varvara Spirina', phone: '+966 54 222 3333', plate: 'KLM 5555', zone: 'West' },
+];
 
 const SHELL = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Axion Mock — MOMRA</title>
@@ -66,16 +81,34 @@ const SHELL = `<!doctype html>
   .dialog-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, .45); display: flex; align-items: center; justify-content: center; }
   .dialog { width: 420px; background: #fff; border-radius: 20px; padding: 24px; }
   .loader { position: fixed; top: 8px; right: 8px; }
+  aside nav { display: flex; flex-direction: column; gap: 2px; }
+  .nav-group-trigger, .nav-item { background: none; border: 0; color: #e2e8f0; font: inherit; text-align: left; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+  .nav-sub { display: grid; grid-template-rows: 1fr; padding-left: 14px; border-left: 1px solid #334155; margin-left: 12px; }
+  .nav-sub[hidden] { display: none; }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+  .toolbar button, [role=tab] { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; cursor: pointer; }
+  [role=tab][aria-selected=true] { background: #0f172a; color: #fff; }
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 320px; background: #fff; box-shadow: -8px 0 24px rgba(15, 23, 42, .2); padding: 24px; }
 </style></head>
 <body><div id="root">
   <aside>
     <strong>Axion</strong>
-    <a href="/dashboard">Dashboard</a>
-    <a href="/inspectors">Inspectors</a>
-    <a href="/assistant">Assistant</a>
-    <a href="/decision/42">Decisions</a>
-    <a href="/secret">Secret</a>
-    <a href="/logout">Log out</a>
+    <nav class="side-nav">
+      <a href="/dashboard">Dashboard</a>
+      <a href="/inspectors">Inspectors</a>
+      <a href="/assistant">Assistant</a>
+      <a href="/decision/42">Decisions</a>
+      <a href="/secret">Secret</a>
+      <div class="nav-group">
+        <button type="button" class="nav-group-trigger" aria-expanded="false" aria-controls="planning-items">Planning</button>
+        <div id="planning-items" class="nav-sub overflow-hidden transition-[grid-template-rows]" hidden>
+          <a href="/planning/schedule">Inspections &amp; schedule</a>
+          <a href="/planning/templates">Templates</a>
+        </div>
+      </div>
+      <span class="nav-item" role="link" tabindex="0" data-to="/reports">Reports</span>
+      <a href="/logout">Log out</a>
+    </nav>
     <div class="user"><img class="avatar" src="/static/avatar.svg" alt="Alexander Shcheblykin"><span class="user-name" id="me">…</span></div>
   </aside>
   <div class="app">
@@ -87,9 +120,27 @@ const SHELL = `<!doctype html>
 <script>
   const $ = (s) => document.querySelector(s);
   const j = (u) => fetch(u).then((r) => r.json());
+  const danger = (what) => fetch('/__admin/danger?what=' + encodeURIComponent(what), { method: 'POST' });
+  function setGroup(open) {
+    $('.nav-group-trigger').setAttribute('aria-expanded', String(open));
+    $('#planning-items').hidden = !open;
+  }
+  const TABS = {
+    calendar: '<div class="panel">Calendar: 12 inspections this week</div>',
+    list: '<div class="panel"><table><tr><td>North zone</td><td>Mon</td></tr><tr><td>East zone</td><td>Tue</td></tr></table></div>',
+    map: '<div class="panel">Map of planned routes</div>',
+    timeline: '<div class="panel">Shift started 08:00 · 14 stops</div>',
+    violations: '<div class="panel">3 violations recorded</div>',
+  };
+  function tabs(names, selected) {
+    return '<div role="tablist" class="tabs">' + names.map((n) =>
+      '<button type="button" role="tab" data-tab="' + n.toLowerCase() + '" aria-selected="' + (n === selected) + '">' + n + '</button>').join('') +
+      '</div><div id="tab-panel">' + TABS[selected.toLowerCase()] + '</div>';
+  }
   async function render() {
     const path = location.pathname;
     document.querySelectorAll('aside a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === path));
+    setGroup(path.startsWith('/planning'));
     const me = await j('/api/me');
     $('#me').textContent = me.name;
     $('#org').textContent = me.org;
@@ -110,8 +161,20 @@ const SHELL = `<!doctype html>
     } else if (path === '/inspectors') {
       const rows = await j('/api/inspectors');
       main.innerHTML = '<h1>Inspectors</h1><div class="panel"><table><thead><tr><th>Name</th><th>Phone</th><th>Plate</th><th>Zone</th></tr></thead><tbody>' +
-        rows.map((r) => '<tr><td class="inspector-name">' + r.name + '</td><td class="phone">' + r.phone + '</td><td class="plate">' + r.plate + '</td><td>' + r.zone + '</td></tr>').join('') +
+        rows.map((r) => '<tr><td class="inspector-name"><a href="/inspectors/' + r.id + '">' + r.name + '</a></td><td class="phone">' + r.phone + '</td><td class="plate">' + r.plate + '</td><td>' + r.zone + '</td></tr>').join('') +
         '</tbody></table></div>';
+    } else if (path.startsWith('/inspectors/')) {
+      const r = await j('/api' + path);
+      main.innerHTML = '<h1 class="inspector-name">' + r.name + '</h1><div class="panel">Vehicle <span class="plate">' + r.plate + '</span> · zone ' + r.zone + '</div>' +
+        tabs(['Timeline', 'Violations'], 'Timeline');
+    } else if (path === '/planning/schedule') {
+      main.innerHTML = '<h1>Inspections &amp; schedule</h1><div class="toolbar"><button type="button" id="filters">Filters</button>' +
+        '<button type="button" id="delete">Delete plan</button></div>' + tabs(['Calendar', 'List', 'Map'], 'Calendar');
+    } else if (path === '/planning/templates') {
+      const t = await j('/api/templates');
+      main.innerHTML = '<h1>Templates</h1><div class="panel template-list">' + t.map((x) => '<div class="template-card">' + x.title + '</div>').join('') + '</div>';
+    } else if (path === '/reports') {
+      main.innerHTML = '<h1>Reports</h1><div class="panel">Monthly report · 4 sections</div>';
     } else if (path === '/assistant') {
       main.innerHTML = '<h1>Assistant</h1><div class="panel chat">' +
         '<div class="msg me">Show MOMRA violations for this week</div>' +
@@ -127,14 +190,33 @@ const SHELL = `<!doctype html>
     }
     setTimeout(() => $('#loader')?.remove(), 300);
   }
+  const go = (to) => { history.pushState({}, '', to); render(); };
   document.addEventListener('click', (e) => {
-    const a = e.target.closest('a');
+    const t = e.target;
+    const a = t.closest('a');
     if (a && a.getAttribute('href') && !a.getAttribute('href').startsWith('/logout')) {
       e.preventDefault();
-      history.pushState({}, '', a.getAttribute('href'));
-      render();
+      go(a.getAttribute('href'));
+      return;
     }
+    const item = t.closest('[data-to]');
+    if (item) return go(item.dataset.to);
+    if (t.closest('.nav-group-trigger')) return setGroup($('.nav-group-trigger').getAttribute('aria-expanded') !== 'true');
+    const tab = t.closest('[role=tab]');
+    if (tab) {
+      tab.parentElement.querySelectorAll('[role=tab]').forEach((x) => x.setAttribute('aria-selected', String(x === tab)));
+      $('#tab-panel').innerHTML = TABS[tab.dataset.tab];
+      return;
+    }
+    if (t.closest('#filters')) {
+      document.body.insertAdjacentHTML('beforeend', '<div class="drawer" role="dialog" aria-label="Filters"><h2>Filters</h2><p>Zone · Inspector · Date</p></div>');
+      return;
+    }
+    if (t.closest('#delete')) return danger('delete plan');
+    const b = t.closest('button');
+    if (b && /approve|reject/i.test(b.textContent)) return danger(b.textContent.trim());
   });
+  window.addEventListener('popstate', render);
   render();
 </script></body></html>`;
 
@@ -153,6 +235,12 @@ export function createMockServer(): http.Server {
     if (p === '/__admin/version') {
       state.version = Number(url.searchParams.get('v') ?? 1);
       res.end('ok');
+      return;
+    }
+    if (p === '/__admin/danger') {
+      if (req.method === 'POST') state.danger.push(url.searchParams.get('what') ?? '?');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(state.danger));
       return;
     }
     if (p === '/login' && req.method === 'POST') {
@@ -196,7 +284,9 @@ export function createMockServer(): http.Server {
   });
 }
 
-export async function startMockServer(port = 0): Promise<{ url: string; close: () => Promise<void>; setVersion: (v: number) => void }> {
+export async function startMockServer(
+  port = 0,
+): Promise<{ url: string; close: () => Promise<void>; setVersion: (v: number) => void; dangerousClicks: () => string[] }> {
   const server = createMockServer();
   await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
   const { port: actual } = server.address() as AddressInfo;
@@ -206,6 +296,7 @@ export async function startMockServer(port = 0): Promise<{ url: string; close: (
     setVersion: (v) => {
       state.version = v;
     },
+    dangerousClicks: () => [...state.danger],
   };
 }
 

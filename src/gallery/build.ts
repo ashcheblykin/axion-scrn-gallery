@@ -1,12 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Workspace } from '../config/load.js';
-import { humanFileName } from '../core/naming.js';
+import { axionFavicon, axionMarkSvg } from '../core/brand.js';
+import { DEFAULT_THEME } from '../core/naming.js';
 import type { LibraryIndex } from '../core/types.js';
 
 /**
  * Static Mobbin-like gallery: library/index.html with the catalog embedded — open it from disk or
  * via `scrn serve`. Thumbnails live in plain git, so the grid works even before `git lfs pull`.
+ * Opened through `scrn serve`, the export panel can hand out any scale, vector or raster SVG and slide
+ * backgrounds (/api/export); from disk it links the files that already exist.
  */
 
 export function galleryData(ws: Workspace, index: LibraryIndex) {
@@ -45,23 +48,24 @@ export function galleryData(ws: Workspace, index: LibraryIndex) {
         overflow: s.overflow,
         viewport: s.viewport,
         files: s.files,
-        sections: s.sections.map((x) => ({ id: x.id, name: x.name, file: x.file })),
-        download: humanFileName({
-          productName: productNames.get(s.product) ?? s.product,
-          flowName: s.flowName,
-          position: s.position,
+        sections: s.sections.map((x) => ({ id: x.id, name: x.name, file: x.file, svg: x.svg })),
+        // File names are built in the page the same way humanFileName does (variant, scale, section).
+        name: {
+          product: productNames.get(s.product) ?? s.product,
+          flow: s.flowName,
+          nn: String(s.position).padStart(2, '0'),
           title: s.title,
-          platform: s.platform,
-          theme: s.theme,
-          locale: s.locale,
-        }).replace(/\.png$/, ''),
+          quals: [s.platform, ...(s.theme !== DEFAULT_THEME ? [s.theme] : []), s.locale],
+        },
       })),
   };
 }
 
 export function buildGallery(ws: Workspace, index: LibraryIndex): string {
   const data = JSON.stringify(galleryData(ws, index)).replace(/</g, '\\u003c');
-  const html = TEMPLATE.replace('__DATA__', data);
+  const html = TEMPLATE.replace('__FAVICON__', axionFavicon())
+    .replace('__MARK__', axionMarkSvg('currentColor', 'class="mark" aria-hidden="true"'))
+    .replace('__DATA__', () => data);
   const file = path.join(ws.paths.library, 'index.html');
   fs.mkdirSync(ws.paths.library, { recursive: true });
   fs.writeFileSync(file, html);
@@ -74,6 +78,7 @@ const TEMPLATE = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Axion Screens</title>
+<link rel="icon" href="__FAVICON__">
 <style>
   :root {
     --bg: #f6f7f9; --panel: #ffffff; --text: #0f172a; --muted: #64748b; --line: #e2e8f0;
@@ -97,7 +102,8 @@ const TEMPLATE = `<!doctype html>
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif; }
   header { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
   .bar { max-width: 1440px; margin: 0 auto; padding: 14px 16px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-  .brand { font-weight: 700; font-size: 16px; margin-right: 8px; }
+  .brand { font-weight: 700; font-size: 16px; margin-right: 8px; display: inline-flex; align-items: center; gap: 8px; }
+  .brand .mark { height: 18px; width: auto; display: block; }
   .meta { color: var(--muted); font-size: 12px; }
   input[type=search], select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; }
   input[type=search] { flex: 1 1 260px; min-width: 0; }
@@ -128,7 +134,7 @@ const TEMPLATE = `<!doctype html>
   .empty { color: var(--muted); padding: 40px 0; text-align: center; }
   dialog { border: 0; border-radius: 16px; padding: 0; width: min(1280px, 96vw); max-height: 94vh; background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
   dialog::backdrop { background: rgba(2, 6, 23, .6); }
-  .viewer { display: grid; grid-template-columns: minmax(0, 1fr) 320px; max-height: 94vh; }
+  .viewer { display: grid; grid-template-columns: minmax(0, 1fr) 344px; max-height: 94vh; }
   .stage { overflow: auto; background: repeating-conic-gradient(var(--check-a) 0% 25%, var(--check-b) 0% 50%) 50% / 24px 24px; display: flex; align-items: flex-start; justify-content: center; padding: 16px; }
   .stage img { max-width: 100%; height: auto; box-shadow: var(--shadow); border-radius: 6px; }
   .side { padding: 16px; overflow: auto; border-left: 1px solid var(--line); display: grid; gap: 12px; align-content: start; }
@@ -140,13 +146,24 @@ const TEMPLATE = `<!doctype html>
   .btn { display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: #fff; border-radius: 10px; padding: 8px 12px; text-decoration: none; font-size: 13px; border: 0; cursor: pointer; }
   .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
   .close { position: absolute; top: 10px; right: 12px; }
+  .export { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+  .export h3 { margin: 0; font-size: 13px; }
+  .ex-row { display: grid; gap: 5px; }
+  .ex-row > span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .opts { display: flex; flex-wrap: wrap; gap: 4px; }
+  .opt { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 4px 9px; font: inherit; font-size: 12px; cursor: pointer; }
+  .opt[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .opt:disabled { opacity: .4; cursor: not-allowed; }
+  .ex-file { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  .ex-note { font-size: 12px; color: var(--warn); }
+  .btn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
   @media (max-width: 860px) { .viewer { grid-template-columns: 1fr; } .side { border-left: 0; border-top: 1px solid var(--line); } }
 </style>
 </head>
 <body>
 <header>
   <div class="bar">
-    <span class="brand">Axion Screens</span>
+    <span class="brand">__MARK__Axion Screens</span>
     <input type="search" id="q" placeholder="Поиск: сводка KPI, карта инспекторов, чат…" aria-label="Поиск">
     <div class="seg" id="view" role="group" aria-label="Вид">
       <button data-v="screens" aria-pressed="true">Экраны</button><button data-v="flows" aria-pressed="false">Флоу</button>
@@ -224,25 +241,115 @@ const TEMPLATE = `<!doctype html>
     } else {
       const flows = D.flows.map((f) => ({ f, screens: f.steps.map((id) => list.find((s) => s.id === id)).filter(Boolean) })).filter((x) => x.screens.length);
       $('#main').innerHTML = flows.map(({ f, screens }) =>
-        '<section class="flow"><h3>' + esc(productName(f.product)) + ' · ' + esc(f.name) + ' <span class="meta">' + esc(f.platform) + ' · ' + screens.length + ' экр.' + (f.brief ? ' · бриф: ' + esc(briefName(f.brief)) : '') + '</span></h3>' +
+        '<section class="flow"><h3>' + esc(productName(f.product)) + ' · ' + esc(f.name) + ' <span class="meta">' + esc(f.platform) + ' · ' + screens.length + ' экр.' + (f.brief ? ' · бриф: ' + esc(briefName(f.brief)) : '') + ((f.tags || []).includes('auto') ? ' · из обхода разделов' : '') + '</span></h3>' +
         (f.description ? '<div class="meta">' + esc(f.description) + '</div>' : '') +
         '<div class="strip">' + screens.map(card).join('') + '</div></section>').join('');
     }
   };
 
-  const open = (id) => {
-    const s = D.screens.find((x) => x.id === id);
-    if (!s) return;
-    const variants = [['default', 'С фоном'], ['clear', 'Без фона'], ['cards', 'Только плашки'], ['full', 'Вся страница']].filter(([k]) => s.files[k]);
-    const show = (path) => { const img = $('#dlg-img'); img.onerror = () => { img.onerror = null; img.src = s.files.thumb.path; }; img.src = path; };
-    const dl = (path, suffix) => '<a class="btn ghost" href="' + esc(path) + '" download="' + esc(s.download + (suffix ? ' ' + suffix : '') + '.png') + '">⬇ ' + esc(suffix || 'PNG') + '</a>';
+  // ---------------------------------------------------------------------------
+  // Viewer + export panel
+  // ---------------------------------------------------------------------------
+  const VARIANTS = [['default', 'С фоном'], ['clear', 'Без фона'], ['cards', 'Только плашки'], ['full', 'Вся страница'], ['framed', 'На подложке']];
+  const BACKGROUNDS = [['gradient', 'Градиент'], ['blur', 'Размытие'], ['white', 'Белая'], ['black', 'Чёрная'], ['transparent', 'Прозрачная']];
+  const SVG_TWIN = { default: 'svg', clear: 'clearSvg', cards: 'cardsSvg', full: 'fullSvg' };
+  const ex = { format: 'png', scale: 2, svg: 'vector', bg: 'gradient' };
+  try { Object.assign(ex, JSON.parse(localStorage.getItem('scrn-export') || '{}')); } catch (e) {}
+  const saveEx = () => { try { localStorage.setItem('scrn-export', JSON.stringify(ex)); } catch (e) {} };
+  let api = false;
+  let cur = null; // { s, section, variant }
+
+  // scrn serve answers /api/ping; a page opened from disk cannot compute exports.
+  fetch('api/ping', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((j) => { api = !!(j && j.export); if (cur) side(); }).catch(() => {});
+
+  const rasterFile = (s, section, variant) => section ? section.file : variant === 'cards' ? (s.files.cards || s.files.clear) : variant === 'framed' ? s.files.default : s.files[variant];
+  const vectorFile = (s, section, variant) => section ? section.svg : variant === 'framed' ? s.files.svg : s.files[SVG_TWIN[variant]];
+  const fileName = (s, section, variant, ext, scale, raster) => {
+    const quals = [...s.name.quals];
+    const v = section ? (variant === 'framed' ? 'framed' : 'section') : variant;
+    if (v !== 'default') quals.push(v);
+    if (raster) quals.push('raster');
+    const at = scale && scale !== 1 ? '@' + scale + 'x' : '';
+    const title = section ? s.name.title + ' — ' + section.name : s.name.title;
+    return (s.name.product + ' · ' + s.name.flow + ' · ' + s.name.nn + ' ' + title + ' (' + quals.join(', ') + ')' + at + '.' + ext).replace(/[\\/\\\\:*?"<>|]+/g, '-');
+  };
+  const exportUrl = (s, section, variant, extra) => {
+    const q = new URLSearchParams({ id: section ? section.id : s.id, variant: section && variant !== 'framed' ? 'default' : variant, format: ex.format });
+    if (ex.format === 'png') q.set('scale', String(ex.scale));
+    else q.set('svg', ex.svg);
+    if (variant === 'framed') q.set('bg', ex.bg);
+    for (const [k, v] of Object.entries(extra || {})) q.set(k, String(v));
+    return 'api/export?' + q.toString();
+  };
+
+  const showImage = (src, fallback) => {
+    const img = $('#dlg-img');
+    img.onerror = () => { img.onerror = null; if (fallback) img.src = fallback; };
+    img.src = src;
+  };
+
+  const preview = () => {
+    const { s, section, variant } = cur;
+    if (variant === 'framed' && api) return showImage(exportUrl(s, section, 'framed', { format: 'png', scale: 1, inline: 1 }), s.files.thumb.path);
+    const f = rasterFile(s, section, variant);
+    showImage(f ? f.path : s.files.default.path, s.files.thumb.path);
+  };
+
+  const opt = (group, value, label, pressed, disabled, title) =>
+    '<button type="button" class="opt" data-g="' + group + '" data-v="' + esc(value) + '" aria-pressed="' + pressed + '"' + (disabled ? ' disabled' : '') + (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(label) + '</button>';
+
+  const exportPanel = () => {
+    const { s, section, variant } = cur;
+    const native = Math.max(1, Math.floor(s.viewport.scale));
+    const scales = Array.from({ length: native }, (_, i) => i + 1);
+    if (!scales.includes(ex.scale)) ex.scale = Math.min(2, native);
+    const variants = section ? [['default', 'Плашка'], ['framed', 'На подложке']] : VARIANTS.filter(([k]) => k === 'framed' || (k === 'cards' ? s.files.cards || s.files.clear : s.files[k]));
+    const vector = vectorFile(s, section, variant);
+    const staticOnly = !api;
+    // From disk only existing files can be handed out: native PNG, captured SVG.
+    const canFramed = api;
+    const svgOk = api || !!vector;
+    if (ex.format === 'svg' && !svgOk) ex.format = 'png';
+    const svgMode = ex.format === 'svg' && !api ? 'vector' : ex.svg;
+    let href = '';
+    let name = '';
+    let dims = '';
+    const r = rasterFile(s, section, variant);
+    if (ex.format === 'png') {
+      const k = ex.scale / s.viewport.scale;
+      dims = variant === 'framed' ? '' : r ? Math.round(r.width * k) + '×' + Math.round(r.height * k) + ' px' : '';
+      name = fileName(s, section, variant, 'png', ex.scale, false);
+      href = api ? exportUrl(s, section, variant) : ex.scale === native && variant !== 'framed' && r ? r.path : '';
+    } else {
+      const raster = svgMode === 'raster' || !vector;
+      name = fileName(s, section, variant, 'svg', 0, raster && (api || !vector));
+      dims = vector && variant !== 'framed' ? vector.width + '×' + vector.height + ' pt' : '';
+      href = api ? exportUrl(s, section, variant) : vector && variant !== 'framed' ? vector.path : '';
+    }
+    const notes = [];
+    if (ex.format === 'svg' && !vector) notes.push('Векторной версии ещё нет (экран снят до SVG) — будет картинка внутри SVG. Пересними экран.');
+    if (staticOnly) notes.push('Масштабы кроме @' + native + 'x, подложки и растровый SVG — в галерее через ./scrn serve.');
+    return '<section class="export"><h3>Экспорт</h3>' +
+      '<div class="ex-row"><span>Вариант</span><div class="opts">' + variants.map(([k, label]) => opt('variant', k, label, variant === k, k === 'framed' && !canFramed, k === 'framed' && !canFramed ? 'Нужен ./scrn serve' : '')).join('') + '</div></div>' +
+      '<div class="ex-row"><span>Формат</span><div class="opts">' + opt('format', 'png', 'PNG', ex.format === 'png') + opt('format', 'svg', 'SVG', ex.format === 'svg', !svgOk, svgOk ? '' : 'Нет векторной версии') + '</div></div>' +
+      (ex.format === 'png'
+        ? '<div class="ex-row"><span>Масштаб</span><div class="opts">' + scales.map((n) => opt('scale', String(n), n + 'x', ex.scale === n, staticOnly && n !== native, staticOnly && n !== native ? 'Нужен ./scrn serve' : '')).join('') + '</div></div>'
+        : '<div class="ex-row"><span>SVG</span><div class="opts">' + opt('svg', 'vector', 'Вектор', svgMode === 'vector', !vector && !api, 'Редактируемый текст и фигуры — для Figma') + opt('svg', 'raster', 'Растр', svgMode === 'raster', staticOnly, 'Пиксель в пиксель: PNG внутри SVG') + '</div></div>') +
+      (variant === 'framed' ? '<div class="ex-row"><span>Подложка</span><div class="opts">' + BACKGROUNDS.map(([k, label]) => opt('bg', k, label, ex.bg === k)).join('') + '</div></div>' : '') +
+      '<div class="actions"><a class="btn" id="ex-download"' + (href ? ' href="' + esc(href) + '" download="' + esc(name) + '"' : ' aria-disabled="true"') + '>⬇ Скачать ' + (ex.format === 'png' ? 'PNG @' + ex.scale + 'x' : 'SVG') + '</a></div>' +
+      '<div class="ex-file">' + esc(name) + (dims ? ' · ' + dims : '') + '</div>' +
+      notes.map((n) => '<div class="ex-note">' + esc(n) + '</div>').join('') +
+      (s.sections.length ? '<div class="ex-row"><span>Плашки</span><div class="opts">' + (section ? opt('target', '', '← Весь экран', false) : '') + s.sections.map((x) => opt('target', x.id, x.name, !!section && section.id === x.id)).join('') + '</div></div>' : '') +
+      '</section>';
+  };
+
+  const side = () => {
+    const { s } = cur;
     $('#dlg-side').innerHTML =
       '<h2>' + esc(s.title) + '</h2><div class="meta">' + esc(productName(s.product)) + ' · ' + esc(s.flowName) + ' · шаг ' + s.position + '</div>' +
       (s.description ? '<div>' + esc(s.description) + '</div>' : '') +
       (s.findings.length ? '<div class="badge bad">Privacy: ' + esc(s.findings.join('; ')) + '</div>' : '') +
-      '<div class="actions">' + variants.map(([k, label], i) => '<button class="btn ' + (i ? 'ghost' : '') + '" data-variant="' + k + '">' + esc(label) + '</button>').join('') + '</div>' +
-      '<div class="actions">' + variants.map(([k, label]) => dl(s.files[k].path, k === 'default' ? '' : label)).join('') + '</div>' +
-      (s.sections.length ? '<div><div class="meta">Плашки</div><div class="actions">' + s.sections.map((x) => '<button class="btn ghost" data-section="' + esc(x.file.path) + '">' + esc(x.name) + '</button>' + dl(x.file.path, x.name)).join('') + '</div></div>' : '') +
+      exportPanel() +
       '<dl class="kv">' +
       '<dt>id</dt><dd>' + esc(s.id) + '</dd>' +
       '<dt>Платформа</dt><dd>' + esc(s.platform) + ' · ' + s.viewport.width + '×' + s.viewport.height + ' @' + s.viewport.scale + 'x</dd>' +
@@ -252,13 +359,31 @@ const TEMPLATE = `<!doctype html>
       '<dt>Маршрут</dt><dd>' + esc(s.route || '—') + '</dd>' +
       '<dt>Версия</dt><dd>v' + s.version + ' · изменён ' + new Date(s.changedAt).toLocaleDateString('ru-RU') + ' · проверен ' + new Date(s.capturedAt).toLocaleDateString('ru-RU') + '</dd>' +
       '</dl>';
-    $('#dlg-side').querySelectorAll('[data-variant]').forEach((b) => b.addEventListener('click', () => {
-      $('#dlg-side').querySelectorAll('[data-variant]').forEach((x) => x.classList.add('ghost'));
-      b.classList.remove('ghost');
-      show(s.files[b.dataset.variant].path);
-    }));
-    $('#dlg-side').querySelectorAll('[data-section]').forEach((b) => b.addEventListener('click', () => show(b.dataset.section)));
-    show(s.files.default.path);
+  };
+
+  $('#dlg-side').addEventListener('click', (e) => {
+    const b = e.target.closest('.opt');
+    if (!b || b.disabled || !cur) return;
+    const v = b.dataset.v;
+    switch (b.dataset.g) {
+      case 'variant': cur.variant = v; break;
+      case 'format': ex.format = v; break;
+      case 'scale': ex.scale = Number(v); break;
+      case 'svg': ex.svg = v; break;
+      case 'bg': ex.bg = v; break;
+      case 'target': cur.section = cur.s.sections.find((x) => x.id === v) || null; cur.variant = 'default'; break;
+    }
+    saveEx();
+    side();
+    if (b.dataset.g === 'variant' || b.dataset.g === 'target' || (cur.variant === 'framed' && b.dataset.g === 'bg')) preview();
+  });
+
+  const open = (id) => {
+    const s = D.screens.find((x) => x.id === id);
+    if (!s) return;
+    cur = { s, section: null, variant: 'default' };
+    side();
+    preview();
     $('#dlg').showModal();
   };
 

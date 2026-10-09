@@ -138,16 +138,23 @@ export function createTextPipeline(cfg: PipelineConfig): TextPipeline {
     return pool[Math.floor(next() * pool.length)];
   }
 
+  /** Plates, IBANs, document numbers: every letter and digit changes, script and layout stay (Saudi plates mix Arabic and Latin). */
   function chars(original: string): string {
     const next = rng(hash(original));
-    const upper = 'ABCDEFGHJKLMNPRSTUVWXYZ';
-    const lower = 'abcdefghjkmnpqrstuvwxyz';
+    const alphabets = [
+      '0123456789',
+      '٠١٢٣٤٥٦٧٨٩',
+      '۰۱۲۳۴۵۶۷۸۹',
+      'ABCDEFGHJKLMNPRSTUVWXYZ',
+      'abcdefghjkmnpqrstuvwxyz',
+      'ابحدرسصطعقكلمنهوى',
+      'АБВГДЕЖЗИКЛМНПРСТУФХЦЧШЭЮЯ',
+      'абвгдежзиклмнпрстуфхцчшэюя',
+    ];
     let out = '';
     for (const ch of original) {
-      if (ch >= '0' && ch <= '9') out += other(ch, '0123456789', next);
-      else if (ch >= 'A' && ch <= 'Z') out += other(ch, upper, next);
-      else if (ch >= 'a' && ch <= 'z') out += other(ch, lower, next);
-      else out += ch;
+      const alphabet = alphabets.find((a) => a.includes(ch)) ?? (/[A-Z]/.test(ch) ? alphabets[3] : /[a-z]/.test(ch) ? alphabets[4] : '');
+      out += alphabet ? other(ch, alphabet, next) : ch;
     }
     return out;
   }

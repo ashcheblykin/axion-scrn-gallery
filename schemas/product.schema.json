@@ -395,12 +395,13 @@
       "default": {},
       "type": "object",
       "properties": {
-        "linkSelectors": {
+        "navSelectors": {
           "default": [
-            "nav a[href]",
-            "aside a[href]",
-            "[role=navigation] a[href]",
-            "header a[href]"
+            "nav",
+            "aside",
+            "[role=navigation]",
+            "header",
+            "[role=menubar]"
           ],
           "type": "array",
           "items": {
@@ -421,16 +422,37 @@
           }
         },
         "maxPages": {
-          "default": 40,
+          "default": 150,
           "type": "integer",
-          "exclusiveMinimum": 0,
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "maxStates": {
+          "default": 150,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "maxTabs": {
+          "default": 8,
+          "type": "integer",
+          "minimum": 0,
           "maximum": 9007199254740991
         },
         "depth": {
-          "default": 1,
+          "default": 3,
           "type": "integer",
           "minimum": 0,
-          "maximum": 3
+          "maximum": 4
+        },
+        "platforms": {
+          "default": [
+            "desktop"
+          ],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },

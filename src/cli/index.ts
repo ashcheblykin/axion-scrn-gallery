@@ -8,11 +8,11 @@ import pc from 'picocolors';
 import { ConfigError, loadWorkspace, type Workspace } from '../config/load.js';
 import { interactiveLogin } from '../capture/auth.js';
 import { launchBrowser } from '../capture/browser.js';
-import { crawl, discoveredFlow, writeSuggestions } from '../capture/discover.js';
+import { discoverProducts, writeSuggestions } from '../capture/discover.js';
 import { parseTargets, runCapture, verifySession } from '../capture/runner.js';
 import { authProfile } from '../capture/session.js';
 import { buildGallery } from '../gallery/build.js';
-import { EXPORT_VARIANTS, exportScreens, type ExportVariant } from '../library/export.js';
+import { EXPORT_FORMATS, EXPORT_VARIANTS, exportScreens, SVG_MODES, type ExportFormat, type ExportVariant, type SvgMode } from '../library/export.js';
 import { LibrarySearch } from '../library/search.js';
 import { Library } from '../library/store.js';
 import { runTagging } from '../tagging/run.js';
@@ -25,7 +25,7 @@ import { runGo } from './go.js';
 import { runRefresh } from './refresh.js';
 import { installSchedule, refreshCommand, uninstallSchedule } from './schedule.js';
 import { writeJsonSchemas } from './schemas.js';
-import { serveLibrary } from './serve.js';
+import { serveOnFreePort } from './serve.js';
 
 const program = new Command();
 program
@@ -80,9 +80,15 @@ program
   .action(async (o) => {
     const { ws, log } = ctx();
     const r = await runGo(ws, { env: o.env, commit: o.commit ? true : undefined, push: o.push ? true : undefined, log });
-    log.dim(`галерея: ${path.relative(ws.root, r.gallery)}`);
-    if (o.open !== false) openInBrowser(r.gallery);
     if (r.capture.run.stats.failed) process.exitCode = 2;
+    if (o.open === false) {
+      log.dim(`галерея: ${path.relative(ws.root, r.gallery)} (с экспортом: ./scrn serve --open)`);
+      return;
+    }
+    // The gallery is served (not opened from disk) so its export panel can render any scale, SVG and backgrounds.
+    const { url } = await serveOnFreePort(ws.paths.library, 4567);
+    log.ok(`галерея: ${url}  (Ctrl+C — остановить)`);
+    openInBrowser(url);
   });
 
 program
@@ -177,12 +183,12 @@ program
 
 program
   .command('discover')
-  .description('Обойти навигацию и снять поверхностные экраны всех разделов (в т.ч. не описанных в каталоге)')
+  .description('Обойти приложение как человек: все разделы и вложенные пункты меню, вкладки, фильтры, карточки — флоу по разделам')
   .argument('[products...]')
   .option('-e, --env <env>')
-  .option('--depth <n>', 'глубина обхода', (v) => Number(v))
+  .option('--depth <n>', 'глубина обхода: 1 — разделы меню, 2 — их карточки, 3 — ещё уровень', (v) => Number(v))
   .option('--max <n>', 'максимум страниц на продукт', (v) => Number(v))
-  .option('-p, --platform <list>', 'платформы для съёмки', list, ['desktop'])
+  .option('-p, --platform <list>', 'платформы для съёмки (по умолчанию discover.platforms продукта)', list)
   .option('--no-capture', 'только найти разделы и записать catalog/discovered/<product>.yaml')
   .option('--headed')
   .action(async (products: string[], o) => {
@@ -191,22 +197,35 @@ program
     const browser = await launchBrowser(ws.config, { headed: o.headed });
     try {
       const extraFlows = [];
-      for (const product of ws.products) {
+      const found = await discoverProducts(ws, browser, ws.products, {
+        env,
+        log,
+        depth: o.depth,
+        maxPages: o.max,
+        platforms: o.platform,
+        only: products.length ? products : undefined,
+      });
+      for (const { product, flows, visited, notes } of found) {
         if (products.length && !products.includes(product.id)) continue;
-        const pages = await crawl(ws, browser, product, { env, log, depth: o.depth, maxPages: o.max });
-        const flow = discoveredFlow(pages, o.platform);
-        if (!flow) {
-          log.dim(`${product.id}: новых разделов не найдено`);
+        for (const n of notes) log.warn(n);
+        if (!flows.length) {
+          log.dim(`${product.id}: новых разделов не найдено${visited ? ` (обойдено ${visited})` : ''}`);
           continue;
         }
-        log.ok(`${product.id}: ${plural(pages.length, ['раздел', 'раздела', 'разделов'])} → ${path.relative(ws.root, writeSuggestions(ws, product, flow))}`);
-        for (const p of pages) log.dim(`  ${p.route}${p.text ? `  «${p.text}»` : ''}`);
-        extraFlows.push({ product: product.id, flow });
+        log.ok(
+          `${product.id}: ${visited ? `${plural(visited, ['страница', 'страницы', 'страниц'])}, ` : ''}${plural(flows.length, ['флоу', 'флоу', 'флоу'])} → ` +
+            path.relative(ws.root, writeSuggestions(ws, product, flows)),
+        );
+        for (const f of flows) {
+          log.info(`  ${f.name} (${f.id}): ${plural(f.steps.length, ['экран', 'экрана', 'экранов'])}`);
+          for (const s of f.steps) log.dim(`    ${s.name}  ${s.url}${s.actions.length ? '  + действие' : ''}`);
+        }
+        extraFlows.push(...flows.map((flow) => ({ product: product.id, flow })));
       }
       if (o.capture && extraFlows.length) {
         const result = await runCapture(ws, {
           env,
-          targets: extraFlows.map((x) => ({ product: x.product })),
+          targets: [...new Set(extraFlows.map((x) => x.product))].map((product) => ({ product })),
           extraFlows,
           onlyExtra: true,
           platforms: o.platform,
@@ -310,13 +329,16 @@ program
 
 program
   .command('export')
-  .description('Файлы для слайдов/Figma: scrn export "сводка KPI" --variant framed --bg blur')
+  .description('Файлы для слайдов/Figma: scrn export "сводка KPI" --variant framed --bg blur · --format svg · --scale 1')
   .argument('<query...>', 'id экранов/секций или поисковый запрос')
   .addOption(new Option('--variant <variant>', 'вариант').choices([...EXPORT_VARIANTS]).default('framed'))
+  .addOption(new Option('-f, --format <format>', 'png или svg').choices([...EXPORT_FORMATS]).default('png'))
+  .addOption(new Option('--svg <mode>', 'svg: vector — редактируемый текст и фигуры, raster — PNG внутри SVG').choices([...SVG_MODES]).default('vector'))
+  .option('-s, --scale <n>', 'png: масштаб к CSS-размеру — 1, 2, 3 (по умолчанию как снято: desktop 2, mobile 3)', (v) => Number(v))
   .option('--bg <background>', 'framed: transparent | white | black | gradient | blur | #hex | путь к картинке', 'gradient')
   .option('--padding <px>', 'отступ, CSS px', (v) => Number(v))
   .option('--radius <px>', 'скругление, CSS px', (v) => Number(v))
-  .option('--width <px>', 'итоговая ширина', (v) => Number(v))
+  .option('--width <px>', 'итоговая ширина PNG (вместо --scale)', (v) => Number(v))
   .option('--no-shadow')
   .option('--product <id>')
   .option('-p, --platform <platform>')
@@ -339,6 +361,9 @@ program
     const files = await exportScreens(library, {
       ids,
       variant: o.variant as ExportVariant,
+      format: o.format as ExportFormat,
+      svgMode: o.svg as SvgMode,
+      scale: o.scale,
       background: o.bg,
       padding: o.padding,
       radius: o.radius,
@@ -346,29 +371,37 @@ program
       shadow: o.shadow,
       outDir,
     });
-    for (const f of files) log.ok(path.relative(ws.root, f.file));
+    for (const f of files) {
+      log.ok(path.relative(ws.root, f.file));
+      for (const n of f.notes) log.dim(`  ${n}`);
+    }
   });
 
 program
   .command('gallery')
   .description('Собрать library/index.html — галерею в духе Mobbin')
-  .option('--open', 'открыть в браузере')
+  .option('--open', 'открыть с диска (экспорт — только готовые файлы; все масштабы, SVG и подложки — scrn serve)')
   .action((o) => {
     const { ws, log } = ctx();
     const file = buildGallery(ws, Library.open(ws.paths.library).index);
     log.ok(path.relative(ws.root, file));
-    if (o.open) openInBrowser(file);
+    if (o.open) {
+      openInBrowser(file);
+      log.dim('Экспорт в любом масштабе, SVG и подложки — в ./scrn serve --open');
+    }
   });
 
 program
   .command('serve')
-  .description('Раздать галерею по http://127.0.0.1:<port>')
+  .description('Галерея с экспортом (PNG 1x/2x/3x, SVG вектор/растр, подложки) на http://127.0.0.1:<port>')
   .option('--port <port>', '', (v) => Number(v), 4567)
+  .option('--open', 'открыть в браузере')
   .action(async (o) => {
     const { ws, log } = ctx();
     buildGallery(ws, Library.open(ws.paths.library).index);
-    await serveLibrary(ws.paths.library, o.port);
-    log.ok(`галерея: http://127.0.0.1:${o.port}`);
+    const { url } = await serveOnFreePort(ws.paths.library, o.port);
+    log.ok(`галерея: ${url}  (Ctrl+C — остановить)`);
+    if (o.open) openInBrowser(url);
   });
 
 program
